@@ -1,0 +1,4 @@
+﻿  skoundrel.cpp
+E:\gamedev\skoundrel\Skoundrel\src\parse.h(287,11): warning C4018: '<': signed/unsigned mismatch
+E:\gamedev\skoundrel\Skoundrel\src\parse.h(485): warning C4715: 'parse_atom': not all control paths return a value
+  Skoundrel.vcxproj -> E:\gamedev\skoundrel\Skoundrel\bin\Debug\Skoundrel.exe
