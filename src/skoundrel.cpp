@@ -36,14 +36,5 @@ int main(int argc, char* argv[])
 		stat->execute(ctx);
 	}
 
-	for (auto e : ecs_query(ecs, { "Position", "Player" }, { "Mass" }))
-	{
-		auto& cp = ecs_get_component_by_instance(ecs, e, "Position");
-
-		auto& x = ecs_get_member_in_component(ecs, cp, "x");
-		auto& y = ecs_get_member_in_component(ecs, cp, "y");
-		printf("%d %d\n", x.data.i.value, y.data.i.value);
-	}
-
 	return 0;
 }
