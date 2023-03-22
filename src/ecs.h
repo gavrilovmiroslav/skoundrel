@@ -209,13 +209,14 @@ void ecs_set_member_in_component(Component& comp, std::string member_name, Float
 	comp.members[member_index].data.f = i;
 }
 
-entt::sparse_set ecs_query(ECS& ecs, std::initializer_list<std::string> positive, std::initializer_list<std::string> negative = {})
+entt::sparse_set ecs_query(ECS& ecs, std::vector<std::string> positive, std::vector<std::string> negative = {})
 {
 	entt::sparse_set result;
 	for (auto type_name : positive)
 	{	
 		auto type_id = ecs.types[type_name];
 		auto& comp_type = ecs.registry.get<ComponentType>(type_id);
+
 		if (result.empty())
 		{
 			result.insert(comp_type.adorned_entities.begin(), comp_type.adorned_entities.end());

@@ -26,8 +26,10 @@ int main(int argc, char* argv[])
 		"define Position(x: int, y: int);"
 		"define Mass(kg: int);"
 		"define Player;"
-		"create player-character1 with Position(x: 1, y: 2), Mass(kg: 1), Player;"
-		"create player-character2 with Position(x: 12, y: 32), Player;");
+		"create player-character1 with Position(x: 1, y: 2), Player;"
+		"create player-character2 with Position(x: 12, y: 32), Player;"
+		"foreach player with Position(x, y), Player { print(); }"
+	);
 
 	for (auto stat : statements)
 	{
