@@ -368,7 +368,7 @@ struct Scope
 
 	std::shared_ptr<Expr> get_binding(std::string name) const
 	{
-		if (!next)
+		if (next)
 		{
 			auto bind = next->get_binding(name);
 			if (bind != nullptr)
@@ -584,7 +584,7 @@ struct CreateEntityStatement : public Statement
 
 				switch (type.members[i].kind)
 				{
-				case EComponentMember::Int:					
+				case EComponentMember::Int:		
 					if (typed_val.type != EType::Int)
 					{
 						ctx.error = std::make_optional(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()));
