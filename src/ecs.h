@@ -79,7 +79,7 @@ struct ECS
 {
 	entt::registry registry;
 	entt::sparse_set created_entities;
-	std::unordered_map<std::string, type_entity> types;
+	std::unordered_map<std::string, type_entity> types;	
 };
 
 const ComponentType& ecs_get_type(ECS& ecs, std::string name)

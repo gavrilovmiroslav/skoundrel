@@ -26,23 +26,32 @@ int main(int argc, char* argv[])
 		"define Position(x: int, y: int);"
 		"define Mass(kg: int);"
 		"define Player;"
+		"define Collision;"
 		"create player-character1 with Position(x: 1, y: 2), Player;"
 		"create player-character2 with Position(x: 12, y: 32), Player;"
-		"foreach player with Position(x, y), Player { print(); }"
+		"system Product[] {"
+		"  foreach player1 with Position(x1, y1), Player {"
+		"    foreach player2 with Position(x2, y2), Player {"
+		"      create collision with Position(x: 5, y: 3), Collision;"
+		"    }"
+		"  }"
+		"}"
+		"system Collisions[] {"
+		"  foreach e1 with Position(x1, y1), Collision {"
+		"    print();"
+		"  }"
+		"}"
 	);
 
-	for (auto stat : statements)
+	if (ctx.is_parse_okay())
 	{
-		stat->execute(ctx);
-	}
+		for (auto stat : statements)
+			stat->execute(ctx);
 
-	for (auto e : ecs_query(ecs, { "Position", "Player" }, { "Mass" }))
-	{
-		auto& cp = ecs_get_component_by_instance(ecs, e, "Position");
-
-		auto& x = ecs_get_member_in_component(ecs, cp, "x");
-		auto& y = ecs_get_member_in_component(ecs, cp, "y");
-		printf("%d %d\n", x.data.i.value, y.data.i.value);
+		printf("\n----------------\n");
+		ctx.update();
+		printf("\n----------------\n");
+		ctx.update();
 	}
 
 	return 0;
