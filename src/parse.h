@@ -69,6 +69,12 @@ enum class EKeyword
 	Foreach,
 	Print,
 	System,
+	Destroy,
+	Attach,
+	Detach,
+	Get,
+	To,
+	From,
 };
 
 struct Token
@@ -135,7 +141,12 @@ std::string stringify_keyword(EKeyword keyword)
 	case EKeyword::Without: return "without";
 	case EKeyword::Query: return "query";
 	case EKeyword::Foreach: return "foreach";
-	case EKeyword::System: return "system";
+	case EKeyword::System: return "system";	
+	case EKeyword::Attach: return "attach";
+	case EKeyword::Detach: return "detach";
+	case EKeyword::Get: return "get";
+	case EKeyword::To: return "to";
+	case EKeyword::From: return "from";
 	case EKeyword::Print: default: return "print";
 	}
 }
@@ -151,6 +162,113 @@ struct TypedValue
 		float float_value;
 	} data;
 };
+
+static const TypedValue operator+(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	switch (lhs.type)
+	{	
+	case EType::Int: 
+		res.type = EType::Int;
+		res.data.int_value = lhs.data.int_value + rhs.data.int_value;
+		break;
+	case EType::Float:
+		res.type = EType::Float;
+		res.data.float_value = lhs.data.float_value + rhs.data.float_value;
+		break;
+	}
+
+	return res;
+}
+
+static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.type = EType::Int;
+		res.data.int_value = lhs.data.int_value - rhs.data.int_value;
+	case EType::Float:
+		res.type = EType::Float;
+		res.data.float_value = lhs.data.float_value - rhs.data.float_value;
+	}
+
+	return res;
+}
+
+static const TypedValue operator*(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.type = EType::Int;
+		res.data.int_value = lhs.data.int_value * rhs.data.int_value;
+		break;
+	case EType::Float:
+		res.type = EType::Float;
+		res.data.float_value = lhs.data.float_value * rhs.data.float_value;
+		break;
+	}
+
+	return res;
+}
+
+static const TypedValue operator/(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.type = EType::Int;
+		res.data.int_value = lhs.data.int_value / rhs.data.int_value;
+		break;
+	case EType::Float:
+		res.type = EType::Float;
+		auto r = rhs.data.float_value;
+		if (r == 0.0f) { r = 0.001f; } 
+		res.data.float_value = lhs.data.float_value / r;
+		break;
+	}
+
+	return res;
+}
+
+static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Float) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.type = EType::Int;
+		res.data.int_value = lhs.data.int_value % rhs.data.int_value;
+		break;
+	}
+
+	return res;
+}
 
 struct Scope;
 struct Statement;
@@ -169,6 +287,7 @@ struct Context
 	Scope* scope;
 	std::optional<std::string> error;
 	std::vector<System> systems;
+	int depth = 0;
 
 	Context();
 	~Context();
@@ -313,25 +432,36 @@ struct ArithExpr : public Expr
 
 	TypedValue eval(Context& ctx) override
 	{
-		return lhs->eval(ctx);
-		//switch (op)
-		//{
-		//case EArithmetic::Add:
-		//	break;
-		//case EArithmetic::Sub:
-		//	break;
-		//case EArithmetic::Mult:
-		//	break;
-		//case EArithmetic::Div:
-		//	break;
-		//case EArithmetic::Mod:
-		//	break;
-		//}
+		switch (op)
+		{
+		case EArithmetic::Add:
+			return lhs->eval(ctx) + rhs->eval(ctx);
+		case EArithmetic::Sub:
+			return lhs->eval(ctx) - rhs->eval(ctx);
+		case EArithmetic::Mult:
+			return lhs->eval(ctx) * rhs->eval(ctx);
+		case EArithmetic::Div:
+			return lhs->eval(ctx) / rhs->eval(ctx);
+		case EArithmetic::Mod:
+			return lhs->eval(ctx) % rhs->eval(ctx);
+		}
 	}
 
 	std::string to_string(Context& ctx) override
 	{
-		return "ARITHMETIC NOT DONE YET!";
+		switch (op)
+		{
+		case EArithmetic::Add:
+			return lhs->to_string(ctx) + " + " + rhs->to_string(ctx);
+		case EArithmetic::Sub:
+			return lhs->to_string(ctx) + " - " + rhs->to_string(ctx);
+		case EArithmetic::Mult:
+			return lhs->to_string(ctx) + " * " + rhs->to_string(ctx);
+		case EArithmetic::Div:
+			return lhs->to_string(ctx) + " / " + rhs->to_string(ctx);
+		case EArithmetic::Mod:
+			return lhs->to_string(ctx) + " % " + rhs->to_string(ctx);
+		}
 	}
 };
 
@@ -351,6 +481,18 @@ struct Scope
 		else
 		{
 			env.insert({ name, value });
+		}
+	}
+
+	void delete_binding(std::string name)
+	{
+		if (next)
+		{
+			next->delete_binding(name);
+		}
+		else
+		{
+			env.erase(name);
 		}
 	}
 
@@ -500,10 +642,12 @@ void Context::update()
 {
 	for (auto& system : systems)
 	{
+		this->depth++;
 		for (auto& statement : system.block)
 		{
 			statement->execute(*this);
 		}
+		this->depth--;
 	}
 }
 
@@ -523,6 +667,13 @@ struct DefineSystemStatement : public Statement
 
 	void execute(Context& ctx) override
 	{
+		if (!ctx.check()) return;
+		if (ctx.depth > 0)
+		{
+			ctx.error = std::make_optional(string_format("Cannot define component within system or query"));
+			return;
+		}
+
 		ctx.systems.push_back(System(system_name, block));
 	}
 };
@@ -540,6 +691,11 @@ struct DefineComponentStatement : public Statement
 	void execute(Context& ctx) override
 	{
 		if (!ctx.check()) return;
+		if (ctx.depth > 0) 
+		{ 
+			ctx.error = std::make_optional(string_format("Cannot define component within system or query"));
+			return;
+		}
 
 		std::vector<std::tuple<std::string, EComponentMember>> comp_members;
 		for (auto& [k, v] : members)
@@ -570,7 +726,8 @@ struct CreateEntityStatement : public Statement
 		if (!ctx.check()) return;
 
 		auto e = ecs_create_instance(*ctx.ecs);
-		
+		ctx.scope->add_binding(entity_name, std::shared_ptr<Expr>(new EntityExpr(e)));
+
 		for (auto& ctor : components)
 		{
 			auto& type = ecs_get_type(*ctx.ecs, ctor.comp_name);
@@ -615,6 +772,37 @@ struct CreateEntityStatement : public Statement
 	}
 };
 
+struct DestroyEntityStatement : public Statement
+{
+	std::string entity_name;
+
+	DestroyEntityStatement(std::string entity_name)
+		: entity_name(entity_name)
+	{}
+
+	void execute(Context& ctx) override
+	{
+		if (!ctx.check()) return;
+
+		auto entity = ctx.scope->get_binding(entity_name);
+		if (!entity)
+		{
+			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			return;
+		}
+
+		auto val = entity->eval(ctx);
+		if (val.type != EType::Entity)
+		{
+			ctx.error = std::make_optional(string_format("Entity expected, but %s found instead", stringify_type(val.type).c_str()));
+			return;
+		}
+
+		ecs_destroy_instance(*ctx.ecs, val.data.entity_value);
+		ctx.scope->delete_binding(entity_name);
+	}
+};
+
 struct PrintContextStatement : public Statement
 {
 	PrintContextStatement() {}
@@ -628,8 +816,116 @@ struct PrintContextStatement : public Statement
 	}
 };
 
+struct AttachStatement : public Statement
+{
+	std::string entity_name;
+	std::vector<CompCtor> components;
+
+	AttachStatement(std::string name, std::vector<CompCtor> comps)
+		: entity_name{name}
+		, components{comps}
+	{}
+
+	void execute(Context& ctx) override
+	{
+		if (!ctx.check()) return;
+
+		auto e = ctx.scope->get_binding(entity_name);
+		if (!e)
+		{
+			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			return;
+		}
+
+		auto entity = dynamic_cast<EntityExpr*>(e.get());
+		if (!entity)
+		{
+			ctx.error = std::make_optional(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()));
+			return;
+		}
+
+		for (auto& ctor : components)
+		{
+			auto& type = ecs_get_type(*ctx.ecs, ctor.comp_name);
+			ecs_adorn_instance(*ctx.ecs, entity->r.value, ctor.comp_name);
+			auto& comp = ecs_get_component_by_instance(*ctx.ecs, entity->r.value, ctor.comp_name);
+
+			int i = 0;
+			for (auto& [member_name, value] : ctor.fields)
+			{
+				auto& typed_val = value->eval(ctx);
+
+				switch (type.members[i].kind)
+				{
+				case EComponentMember::Int:
+					if (typed_val.type != EType::Int)
+					{
+						ctx.error = std::make_optional(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()));
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, Int{ typed_val.data.int_value });
+					break;
+				case EComponentMember::Float:
+					if (typed_val.type != EType::Float)
+					{
+						ctx.error = std::make_optional(string_format("Expected float, got %s", stringify_type(typed_val.type).c_str()));
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, Float{ typed_val.data.float_value });
+					break;
+				case EComponentMember::EntityRef:
+					if (typed_val.type != EType::Entity)
+					{
+						ctx.error = std::make_optional(string_format("Expected entity ref, got %s", stringify_type(typed_val.type).c_str()));
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, EntityRef{ typed_val.data.entity_value });
+					break;
+				}
+				i++;
+			}
+		}
+	}
+};
+
+struct DetachStatement : public Statement
+{
+	std::string entity_name;
+	std::vector<std::string> components;
+
+	DetachStatement(std::string name, std::vector<std::string> comps)
+		: entity_name{ name }
+		, components{ comps }
+	{}
+
+	void execute(Context& ctx) override
+	{
+		if (!ctx.check()) return;
+
+		auto e = ctx.scope->get_binding(entity_name);
+		if (!e)
+		{
+			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			return;
+		}
+
+		auto entity = dynamic_cast<EntityExpr*>(e.get());
+		if (!entity)
+		{
+			ctx.error = std::make_optional(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()));
+			return;
+		}
+
+		for (auto& comp : components)
+		{
+			ecs_unadorn_instance(*ctx.ecs, entity->r.value, comp);
+		}
+	}
+};
+
 struct QueryEntitiesStatement : public Statement
 {
+	std::string entity_name;
 	std::vector<CompParamCtor> positive_components;
 	std::vector<CompParamCtor> negative_components;
 
@@ -637,8 +933,9 @@ struct QueryEntitiesStatement : public Statement
 	std::vector<std::string> negative_names;
 	std::vector<std::shared_ptr<Statement>> block;
 
-	QueryEntitiesStatement(std::vector<CompParamCtor> positive, std::vector<CompParamCtor> negative, std::vector<std::shared_ptr<Statement>> block)
-		: positive_components(positive)
+	QueryEntitiesStatement(std::string entity_name, std::vector<CompParamCtor> positive, std::vector<CompParamCtor> negative, std::vector<std::shared_ptr<Statement>> block)
+		: entity_name(entity_name)
+		, positive_components(positive)
 		, negative_components(negative)
 		, block(block)
 	{
@@ -661,6 +958,8 @@ struct QueryEntitiesStatement : public Statement
 		for (auto entity : query)
 		{
 			ctx.scope->push_scope();
+			ctx.scope->add_binding(entity_name, std::shared_ptr<EntityExpr>(new EntityExpr(entity)));
+
 			for (auto& comp_ctor : positive_components)
 			{
 				const auto& comp = ecs_get_component_by_instance(*ctx.ecs, entity, comp_ctor.comp_name);
@@ -703,10 +1002,12 @@ struct QueryEntitiesStatement : public Statement
 				}
 			}
 
+			ctx.depth++;
 			for (auto statement : block)
 			{
 				statement->execute(ctx);
 			}
+			ctx.depth--;
 			ctx.scope->pop_scope();
 		}
 	}
@@ -732,6 +1033,8 @@ std::string trim(const std::string& s) {
 
 std::vector<std::string> split(std::string source_code)
 {
+	static std::unordered_set<char> symbols{ '(', ')', ',', ';', ':', '[', ']', '_', '@', '+', '-', '*', '/', '{', '}' };
+
 	std::vector<std::string> tokens;
 	std::string current_token{};
 
@@ -764,7 +1067,7 @@ std::vector<std::string> split(std::string source_code)
 			}
 			current_token = "";
 			
-			if (c == '(' || c == ')' || c == ',' || c == ';' || c == ':' || c == '[' || c == ']' || c == '_' || c == '@' || c == '{' || c == '}')
+			if (symbols.count(c) > 0)
 			{
 				current_token += c;
 				tokens.push_back(current_token);
@@ -783,7 +1086,12 @@ std::vector<std::string> split(std::string source_code)
 
 std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 {
-	static std::unordered_set<std::string> keywords{ "create", "entity", "with", "without", "foreach", "query", "define", "print", "system" };
+	static std::unordered_set<std::string> keywords{ 
+		"create", "entity", "with", "without", 
+		"foreach", "query", "define", "print", 
+		"system", "destroy", "attach", "detach",
+		"get", "to", "from",
+	};
 	static std::unordered_set<std::string> symbols{ "(", ")", ",", ";", ":", "[", "]", "_", "@", "+", "-", "*", "/", "{", "}" };
 
 	std::deque<Token> tokens;
@@ -811,6 +1119,18 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 				token.keyword = EKeyword::Print;
 			else if (tok == "system")
 				token.keyword = EKeyword::System;
+			else if (tok == "destroy")
+				token.keyword = EKeyword::Destroy;
+			else if (tok == "attach")
+				token.keyword = EKeyword::Attach;
+			else if (tok == "detach")
+				token.keyword = EKeyword::Detach;
+			else if (tok == "get")
+				token.keyword = EKeyword::Get;
+			else if (tok == "to")
+				token.keyword = EKeyword::To;
+			else if (tok == "from")
+				token.keyword = EKeyword::From;
 			tokens.push_back(token);
 		}
 		else if (symbols.count(tok) > 0)
@@ -1067,7 +1387,7 @@ CompParamCtor parse_comp_params_ctor(std::deque<Token>& tokens)
 	return CompParamCtor{ comp_name, fields };
 }
 
-// 	"define Position(x: int, y: int);"
+// "define Position(x: int, y: int);"
 std::shared_ptr<Statement> parse_comp_define(std::deque<Token>& tokens)
 {
 	digest_keyword(tokens, EKeyword::Define);
@@ -1092,7 +1412,7 @@ std::shared_ptr<Statement> parse_comp_define(std::deque<Token>& tokens)
 	return std::make_shared<DefineComponentStatement>(comp_name, members);
 }
 
-//	"create player-character with Position(x: 10, y: 10), Mass(kg: 1), Player();"
+//"create player-character with Position(x: 10, y: 10), Mass(kg: 1), Player();"
 std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 {
 	digest_keyword(tokens, EKeyword::Create);
@@ -1108,6 +1428,50 @@ std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 	digest(tokens, EToken::Semicolon);
 
 	return std::make_shared<CreateEntityStatement>(entity_name, comps);
+}
+
+//"destroy player-character;"
+std::shared_ptr<Statement> parse_destroy_entity(std::deque<Token>& tokens)
+{
+	digest_keyword(tokens, EKeyword::Destroy);
+	auto entity_name = digest_quote(tokens);
+	digest(tokens, EToken::Semicolon);
+
+	return std::make_shared<DestroyEntityStatement>(entity_name);
+}
+
+//"attach Player(x: 2, y: 3) to player-character;"
+std::shared_ptr<Statement> parse_attach_entity(std::deque<Token>& tokens)
+{
+	digest_keyword(tokens, EKeyword::Attach);
+	std::vector<CompCtor> comps;
+	while (tokens.front().keyword != EKeyword::To)
+	{
+		comps.push_back(parse_comp_ctor(tokens));
+		maybe_digest(tokens, EToken::Comma);
+	}
+	digest_keyword(tokens, EKeyword::To);
+	auto entity_name = digest_quote(tokens);
+	digest(tokens, EToken::Semicolon);
+
+	return std::make_shared<AttachStatement>(entity_name, comps);
+}
+
+//"detach Player from player-character;"
+std::shared_ptr<Statement> parse_detach_entity(std::deque<Token>& tokens)
+{
+	digest_keyword(tokens, EKeyword::Detach);
+	std::vector<std::string> comps;
+	while (tokens.front().keyword != EKeyword::From)
+	{
+		comps.push_back(digest_quote(tokens));
+		maybe_digest(tokens, EToken::Comma);
+	}
+	digest_keyword(tokens, EKeyword::From);
+	auto entity_name = digest_quote(tokens);
+	digest(tokens, EToken::Semicolon);
+
+	return std::make_shared<DetachStatement>(entity_name, comps);
 }
 
 std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
@@ -1169,7 +1533,7 @@ std::shared_ptr<Statement> parse_foreach(std::deque<Token>& tokens)
 	auto block = parse_block(tokens);
 	digest(tokens, EToken::ClosedBrace);
 
-	return std::shared_ptr<Statement>(new QueryEntitiesStatement(positive_comps, negative_comps, block));
+	return std::shared_ptr<Statement>(new QueryEntitiesStatement(entity_name, positive_comps, negative_comps, block));
 }
 
 // "print();"
@@ -1187,35 +1551,8 @@ std::vector<std::shared_ptr<Statement>> parse(std::string input)
 	std::vector<std::shared_ptr<Statement>> statements;
 
 	auto& tokens = tokenize(split(input));
-	
-	while (!tokens.empty() && tokens.front().type == EToken::Keyword)
-	{
-		if (parse_error.has_value()) return statements;
 
-		auto tok = tokens.front();
-		if (tok.keyword == EKeyword::Define)
-		{
-			statements.push_back(parse_comp_define(tokens));
-		}
-		else if (tok.keyword == EKeyword::Create)
-		{
-			statements.push_back(parse_create_entity(tokens));
-		}
-		else if (tok.keyword == EKeyword::Foreach)
-		{
-			statements.push_back(parse_foreach(tokens));
-		}
-		else if (tok.keyword == EKeyword::Print)
-		{
-			statements.push_back(parse_print(tokens));
-		}
-		else if (tok.keyword == EKeyword::System)
-		{
-			statements.push_back(parse_system(tokens));
-		}
-	}
-
-	return statements;
+	return parse_block(tokens);
 }
 
 std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
@@ -1229,12 +1566,27 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 		auto tok = tokens.front();
 		if (tok.keyword == EKeyword::Define)
 		{
-			parse_error = std::make_optional(string_format("Define not allowed in a block."));
-			return std::vector<std::shared_ptr<Statement>>{};
+			statements.push_back(parse_comp_define(tokens));
 		}
 		else if (tok.keyword == EKeyword::Create)
 		{
 			statements.push_back(parse_create_entity(tokens));
+		}
+		else if (tok.keyword == EKeyword::Destroy)
+		{
+			statements.push_back(parse_destroy_entity(tokens));
+		}
+		else if (tok.keyword == EKeyword::Attach)
+		{
+			statements.push_back(parse_attach_entity(tokens));
+		}
+		else if (tok.keyword == EKeyword::Detach)
+		{
+			statements.push_back(parse_detach_entity(tokens));
+		}
+		else if (tok.keyword == EKeyword::Get)
+		{
+			//statements.push_back(parse_destroy_entity(tokens));
 		}
 		else if (tok.keyword == EKeyword::Foreach)
 		{
@@ -1243,6 +1595,10 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 		else if (tok.keyword == EKeyword::Print)
 		{
 			statements.push_back(parse_print(tokens));
+		}
+		else if (tok.keyword == EKeyword::System)
+		{
+			statements.push_back(parse_system(tokens));
 		}
 	}
 

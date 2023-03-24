@@ -119,6 +119,12 @@ instance_entity ecs_create_instance(ECS& ecs)
 	return entity;
 }
 
+void ecs_destroy_instance(ECS& ecs, instance_entity entity)
+{
+	auto version = ecs.registry.current(entity);
+	ecs.registry.destroy(entity, version);
+}
+
 comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_name)
 {
 	assert(ecs.types.count(type_name) > 0);
@@ -132,7 +138,8 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 	instance.type_id = type;
 
 	auto& type_def = ecs.registry.get<ComponentType>(type);
-	type_def.adorned_entities.emplace(key);
+	if (!type_def.adorned_entities.contains(key))
+		type_def.adorned_entities.emplace(key);
 
 	std::uint8_t index = 0;
 	for (const auto& mem : type_def.members)
@@ -167,8 +174,34 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 	return entity;
 }
 
-Component& ecs_get_component_by_instance(ECS& ecs, instance_entity instance_id, std::string type_name)
+void ecs_unadorn_instance(ECS& ecs, instance_entity key, std::string type_name)
 {
+	assert(ecs.types.count(type_name) > 0);
+
+	const auto& type = ecs.types[type_name];
+
+	auto& type_def = ecs.registry.get<ComponentType>(type);
+	type_def.adorned_entities.remove(key);
+
+	auto entity = ecs.registry.create();
+
+	auto& instance = ecs.registry.emplace<Component>(entity);
+	instance.key_id = key;
+	instance.type_id = type;
+
+	std::uint8_t index = 0;
+
+	auto& instance_reg = ecs.registry.get<Instance>(key);
+	const auto& comp = instance_reg.registered.find(type);
+	if (comp != instance_reg.registered.end())
+	{
+		ecs.registry.destroy(comp->second);
+		instance_reg.registered.erase(comp->first);
+	}
+}
+
+Component& ecs_get_component_by_instance(ECS& ecs, instance_entity instance_id, std::string type_name)
+{	
 	auto& instance_reg = ecs.registry.get<Instance>(instance_id);
 	auto type_id = ecs.types.find(type_name);
 	assert(type_id != ecs.types.end());
