@@ -22,56 +22,9 @@ int main(int argc, char* argv[])
 	Context ctx;
 	ctx.ecs = &ecs;
 
-	auto statements = parse(
-		"define Position(x: int, y: int);"
-		"define Mass(kg: int);"
-		"define Hit(ok: bool);"
-		"define Player;"
-		"define Collision;"
+	parse_file(ctx, "test.ska");
 
-		"create player-character1 with Hit(ok: 3 == 4);"
-		"create player-character2 with Hit(ok: true);"
-		"print();"
-		"foreach pl with Hit(state) {"
-		"  if (state) {"
-		"    print();"
-		"  }"
-		"}"
-		"detach Player from player-character1;"
-		"destroy player-character1;"
-
-		"create player-character1 with Position(x: 1 + 1, y: 2 + 2), Player, Hit(ok: 5 == 5);"		
-		"create player-character2 with Position(x: 12, y: 32), Player;"
-		"attach Mass(kg: 1) to player-character1;"
-		"attach Mass(kg: 33) to player-character1;"
-		"detach Mass from player-character1;"
-		"system Product[] {"
-		"  foreach player1 with Position(x1, y1), Player, Hit(ok) {"
-		"    print();"
-		"  }"
-		"}"
-
-		"system Collisions[] {"
-		"  foreach e1 with Position(x1, y1), Collision {"
-		"    create collision with Position(x: x1 * 2, y: 2 * y1), Collision;"
-		"    print();"
-		"    destroy e1;"
-		"  }"
-		"}"
-	);
-
-	if (ctx.is_parse_okay())
-	{
-		for (auto stat : statements)
-			stat->execute(ctx);
-
-		printf("\n----------------\n");
-		ctx.update();
-		printf("\n----------------\n");
-		ctx.update();
-		printf("\n----------------\n");
-		ctx.update();
-	}
+	ctx.update();
 
 	return 0;
 }

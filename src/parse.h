@@ -9,9 +9,12 @@
 #include <iostream>
 #include <algorithm>
 #include <optional>
+#include <fstream>
+#include <sstream>
+#include <cstdarg>
+#include <memory>
 
-#include <stdarg.h>  // For va_start, etc.
-#include <memory>    // For std::unique_ptr
+#include "ecs.h"
 
 std::string string_format(const std::string fmt_str, ...) 
 {
@@ -33,8 +36,6 @@ std::string string_format(const std::string fmt_str, ...)
 
 	return std::string(formatted.get());
 }
-
-#include "ecs.h"
 
 enum class EToken
 {
@@ -84,12 +85,21 @@ enum class EKeyword
 
 struct Token
 {
+	int line;
+	int start;
+	int end;
 	EToken type;
 
 	EKeyword keyword;
 	std::string quote;
 	int number;
 	bool boolean;
+};
+
+struct ParseError
+{
+	std::string text;
+	Token token;
 };
 
 enum class EType
@@ -331,6 +341,12 @@ LOGICAL_OP(>);
 struct Scope;
 struct Statement;
 
+struct InterpretError
+{
+	std::string text;
+	Statement* statement;
+};
+
 struct System
 {
 	std::string name;
@@ -343,7 +359,13 @@ struct Context
 {
 	ECS* ecs = nullptr;
 	Scope* scope;
-	std::optional<std::string> error;
+	
+	std::vector<std::string> source_lines;
+	std::string source_text;
+	std::vector<std::shared_ptr<Statement>> interpreted_statements;
+
+	std::optional<ParseError> parse_error;
+	std::optional<InterpretError> interpret_error;
 	std::vector<System> systems;
 	int depth = 0;
 
@@ -352,9 +374,27 @@ struct Context
 
 	bool is_parse_okay();
 
-	bool check(std::optional<std::string> error);
+	bool check_parse_error(std::optional<ParseError> error = std::nullopt);
+
+	bool has_errors()
+	{
+		return parse_error.has_value() || interpret_error.has_value();
+	}
+
+	void execute();
 
 	void update();
+	
+	void make_interpret_error(std::string err, Statement* statement)
+	{
+		InterpretError error;
+		error.text = err;
+		error.statement = statement;
+		
+		this->interpret_error = std::make_optional(error);
+	}
+
+	void die_with_error();
 };
 
 struct Expr
@@ -720,27 +760,13 @@ Context::~Context()
 	delete scope;
 }
 
-static std::optional<std::string> parse_error = std::nullopt;
+std::optional<ParseError> generic_parse_error = std::nullopt;
 
 bool Context::is_parse_okay()
 {
-	return check(parse_error);
-}
+	this->parse_error = generic_parse_error;
 
-bool Context::check(std::optional<std::string> error = std::nullopt)
-{
-	if (error.has_value())
-	{
-		this->error = error;
-	}
-
-	if (this->error.has_value())
-	{
-		printf("Error: %s\n", this->error.value().c_str());
-		return false;
-	}
-
-	return true;
+	return !this->parse_error.has_value();
 }
 
 TypedValue VarExpr::eval(Context& ctx)
@@ -768,9 +794,17 @@ struct CompParamCtor
 	std::vector<std::shared_ptr<Expr>> params;
 };
 
+using Range = std::tuple<Token, Token>;
+
 struct Statement
 {
+	Token start, end;
 	virtual void execute(Context& ctx) = 0;
+
+	Statement(Token start, Token end)
+		: start(start)
+		, end(end)
+	{}
 };
 
 void Context::update()
@@ -786,6 +820,50 @@ void Context::update()
 	}
 }
 
+void Context::execute()
+{
+	for (auto stat : interpreted_statements)
+	{
+		stat->execute(*this);
+		if (has_errors())
+		{
+			die_with_error();
+			return;
+		}
+	}
+}
+
+void Context::die_with_error()
+{
+	if (this->parse_error.has_value())
+	{
+		auto p = this->parse_error.value();
+		printf("\n PARSER ERROR: \n\n");
+		for (int i = -3; i < 0; i++)
+		{
+			int l = p.token.line + i;
+			if (l >= 0)
+				printf("  %s\n", this->source_lines[l].c_str());
+		}
+		auto sp = std::string(p.token.start, ' ') + std::string(p.token.end - p.token.start, '^');
+		printf("%s -- (%d:%d) %s\n", sp.c_str(), p.token.line, p.token.start, p.text.c_str());
+		
+		for (int i = 0; i < 3; i++)
+		{
+			int l = p.token.line + i + 1;
+			if (l < source_lines.size())
+				printf("  %s\n", this->source_lines[l].c_str());
+		}
+	}
+
+	if (interpret_error.has_value())
+	{
+		auto i = interpret_error.value();
+		printf("INTERPRETATION ERROR: %s\n", i.text.c_str());
+		printf("  %s\n", this->source_lines[i.statement->start.line - 1].c_str());
+	}
+}
+
 System::System(std::string name, std::vector<std::shared_ptr<Statement>> block)
 	: name(name), block(block)
 {}
@@ -796,10 +874,12 @@ struct IfStatement : public Statement
 	std::vector<std::shared_ptr<Statement>> then_branch;
 	std::vector<std::shared_ptr<Statement>> else_branch;
 
-	IfStatement(std::shared_ptr<Expr> cond, 
+	IfStatement(Range range,
+		std::shared_ptr<Expr> cond, 
 		std::vector<std::shared_ptr<Statement>> then_block, 
 		std::vector<std::shared_ptr<Statement>> else_block)
-		: condition(cond)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, condition(cond)
 		, then_branch(then_block)
 		, else_branch(else_block)
 	{}
@@ -808,8 +888,8 @@ struct IfStatement : public Statement
 	{
 		const auto& cond = condition->eval(ctx);
 		if (cond.type != EType::Bool)
-		{
-			ctx.error = std::make_optional(string_format("Condition must be a boolean, %s found instead", stringify_type(cond.type)));
+		{	
+			ctx.make_interpret_error(string_format("Condition must be a boolean, %s found instead", stringify_type(cond.type)), this);
 			return;
 		}
 
@@ -840,16 +920,17 @@ struct DefineSystemStatement : public Statement
 	// TODO: add system constraints 
 	std::vector<std::shared_ptr<Statement>> block;
 
-	DefineSystemStatement(std::string name, std::vector<std::shared_ptr<Statement>> block)
-		: system_name(name), block(block)
+	DefineSystemStatement(Range range, std::string name, std::vector<std::shared_ptr<Statement>> block)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, system_name(name), block(block)
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 		if (ctx.depth > 0)
 		{
-			ctx.error = std::make_optional(string_format("Cannot define component within system or query"));
+			ctx.make_interpret_error(string_format("Cannot define component within system or query"), this);
 			return;
 		}
 
@@ -862,17 +943,18 @@ struct DefineComponentStatement : public Statement
 	std::string comp_name;
 	std::vector<std::tuple<std::string, EType>> members;
 
-	DefineComponentStatement(std::string name, std::vector<std::tuple<std::string, EType>> mems)
-		: comp_name(name)
+	DefineComponentStatement(Range range, std::string name, std::vector<std::tuple<std::string, EType>> mems)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, comp_name(name)
 		, members(mems)
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 		if (ctx.depth > 0) 
 		{ 
-			ctx.error = std::make_optional(string_format("Cannot define component within system or query"));
+			ctx.make_interpret_error(string_format("Cannot define component within system or query"), this);
 			return;
 		}
 
@@ -896,14 +978,15 @@ struct CreateEntityStatement : public Statement
 	std::string entity_name;
 	std::vector<CompCtor> components;
 
-	CreateEntityStatement(std::string name, std::vector<CompCtor> flds)
-		: entity_name(name)
+	CreateEntityStatement(Range range, std::string name, std::vector<CompCtor> flds)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name(name)
 		, components(flds)
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		auto e = ecs_create_instance(*ctx.ecs);
 		ctx.scope->add_binding(entity_name, std::shared_ptr<Expr>(new EntityExpr(e)));
@@ -924,7 +1007,7 @@ struct CreateEntityStatement : public Statement
 				case EComponentMember::Bool:
 					if (typed_val.type != EType::Bool)
 					{
-						ctx.error = std::make_optional(string_format("Expected bool, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected bool, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, Bool{ typed_val.data.bool_value });
@@ -932,7 +1015,7 @@ struct CreateEntityStatement : public Statement
 				case EComponentMember::Int:
 					if (typed_val.type != EType::Int)
 					{
-						ctx.error = std::make_optional(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, Int{ typed_val.data.int_value });
@@ -940,7 +1023,7 @@ struct CreateEntityStatement : public Statement
 				case EComponentMember::Float:
 					if (typed_val.type != EType::Float)
 					{
-						ctx.error = std::make_optional(string_format("Expected float, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected float, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, Float{ typed_val.data.float_value });
@@ -948,7 +1031,7 @@ struct CreateEntityStatement : public Statement
 				case EComponentMember::EntityRef:
 					if (typed_val.type != EType::Entity)
 					{
-						ctx.error = std::make_optional(string_format("Expected entity ref, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected entity ref, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, EntityRef{ typed_val.data.entity_value });
@@ -964,25 +1047,26 @@ struct DestroyEntityStatement : public Statement
 {
 	std::string entity_name;
 
-	DestroyEntityStatement(std::string entity_name)
-		: entity_name(entity_name)
+	DestroyEntityStatement(Range range, std::string entity_name)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name(entity_name)
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		auto entity = ctx.scope->get_binding(entity_name);
 		if (!entity)
 		{
-			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			ctx.make_interpret_error(string_format("Variable '%s' not found", entity_name.c_str()), this);
 			return;
 		}
 
 		auto val = entity->eval(ctx);
 		if (val.type != EType::Entity)
 		{
-			ctx.error = std::make_optional(string_format("Entity expected, but %s found instead", stringify_type(val.type).c_str()));
+			ctx.make_interpret_error(string_format("Entity expected, but %s found instead", stringify_type(val.type).c_str()), this);
 			return;
 		}
 
@@ -993,11 +1077,13 @@ struct DestroyEntityStatement : public Statement
 
 struct PrintContextStatement : public Statement
 {
-	PrintContextStatement() {}
+	PrintContextStatement(Range range) 
+		: Statement(std::get<0>(range), std::get<1>(range)) 
+	{}
 
 	void execute(Context& ctx) override
 	{		
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		ctx.scope->print(ctx);
 		printf("\n");
@@ -1009,26 +1095,27 @@ struct AttachStatement : public Statement
 	std::string entity_name;
 	std::vector<CompCtor> components;
 
-	AttachStatement(std::string name, std::vector<CompCtor> comps)
-		: entity_name{name}
+	AttachStatement(Range range, std::string name, std::vector<CompCtor> comps)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name{name}
 		, components{comps}
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		auto e = ctx.scope->get_binding(entity_name);
 		if (!e)
 		{
-			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			ctx.make_interpret_error(string_format("Variable '%s' not found", entity_name.c_str()), this);
 			return;
 		}
 
 		auto entity = dynamic_cast<EntityExpr*>(e.get());
 		if (!entity)
 		{
-			ctx.error = std::make_optional(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()));
+			ctx.make_interpret_error(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()), this);
 			return;
 		}
 
@@ -1048,7 +1135,7 @@ struct AttachStatement : public Statement
 				case EComponentMember::Int:
 					if (typed_val.type != EType::Int)
 					{
-						ctx.error = std::make_optional(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, Int{ typed_val.data.int_value });
@@ -1056,7 +1143,7 @@ struct AttachStatement : public Statement
 				case EComponentMember::Float:
 					if (typed_val.type != EType::Float)
 					{
-						ctx.error = std::make_optional(string_format("Expected float, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected float, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, Float{ typed_val.data.float_value });
@@ -1064,7 +1151,7 @@ struct AttachStatement : public Statement
 				case EComponentMember::EntityRef:
 					if (typed_val.type != EType::Entity)
 					{
-						ctx.error = std::make_optional(string_format("Expected entity ref, got %s", stringify_type(typed_val.type).c_str()));
+						ctx.make_interpret_error(string_format("Expected entity ref, got %s", stringify_type(typed_val.type).c_str()), this);
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, EntityRef{ typed_val.data.entity_value });
@@ -1081,26 +1168,27 @@ struct DetachStatement : public Statement
 	std::string entity_name;
 	std::vector<std::string> components;
 
-	DetachStatement(std::string name, std::vector<std::string> comps)
-		: entity_name{ name }
+	DetachStatement(Range range, std::string name, std::vector<std::string> comps)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name{ name }
 		, components{ comps }
 	{}
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		auto e = ctx.scope->get_binding(entity_name);
 		if (!e)
 		{
-			ctx.error = std::make_optional(string_format("Variable '%s' not found", entity_name.c_str()));
+			ctx.make_interpret_error(string_format("Variable '%s' not found", entity_name.c_str()), this);
 			return;
 		}
 
 		auto entity = dynamic_cast<EntityExpr*>(e.get());
 		if (!entity)
 		{
-			ctx.error = std::make_optional(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()));
+			ctx.make_interpret_error(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()), this);
 			return;
 		}
 
@@ -1121,8 +1209,9 @@ struct QueryEntitiesStatement : public Statement
 	std::vector<std::string> negative_names;
 	std::vector<std::shared_ptr<Statement>> block;
 
-	QueryEntitiesStatement(std::string entity_name, std::vector<CompParamCtor> positive, std::vector<CompParamCtor> negative, std::vector<std::shared_ptr<Statement>> block)
-		: entity_name(entity_name)
+	QueryEntitiesStatement(Range range, std::string entity_name, std::vector<CompParamCtor> positive, std::vector<CompParamCtor> negative, std::vector<std::shared_ptr<Statement>> block)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name(entity_name)
 		, positive_components(positive)
 		, negative_components(negative)
 		, block(block)
@@ -1140,7 +1229,7 @@ struct QueryEntitiesStatement : public Statement
 
 	void execute(Context& ctx) override
 	{
-		if (!ctx.check()) return;
+		if (ctx.has_errors()) return;
 
 		auto& query = ecs_query(*ctx.ecs, positive_names, negative_names);
 		for (auto entity : query)
@@ -1186,7 +1275,7 @@ struct QueryEntitiesStatement : public Statement
 					{
 						if (dynamic_cast<VarExpr*>(var_param.get()) != nullptr)
 						{
-							ctx.error = std::make_optional(string_format("Expected variable name."));
+							ctx.make_interpret_error(string_format("Expected variable name."), this);
 							return;
 						}
 					}
@@ -1224,19 +1313,47 @@ std::string trim(const std::string& s) {
 	return rtrim(ltrim(s));
 }
 
-std::vector<std::string> split(std::string source_code)
+struct TokenPos
 {
-	static std::unordered_set<char> symbols{ '(', ')', ',', ';', ':', '[', ']', '_', '@', '+', '-', '*', '/', '{', '}', '<', '>', '=', '!'};
+	std::string token;
+	int line;
+	int start;
+	int end;
+};
 
-	std::vector<std::string> tokens;
+std::vector<TokenPos> split(std::string source_code)
+{
+	static std::unordered_set<char> symbols{ 
+		'(', ')', ',', ';', ':', '[', ']', '_', 
+		'@', '+', '-', '*', '/', '{', '}', '<', 
+		'>', '=', '!'
+	};
+
+	std::vector<TokenPos> tokens;
 	std::string current_token{};
 
 	int i = 0;
+	int x = 0;
+	int y = 1;
+	int start_x = 0;
+
 	for (; i < source_code.size(); i++)
-	{
+	{				
 		const char c = source_code[i];
+		
+		if (c == '\n') 
+		{
+			y++; x = 0;
+			start_x = 0;
+		}
+
+		x++;
 		if (std::isalnum(c) || c == '-')
 		{
+			if (current_token == "")
+			{
+				start_x = x;
+			}
 			current_token += c;
 		}
 		else if (std::isspace(c))
@@ -1246,7 +1363,12 @@ std::vector<std::string> split(std::string source_code)
 				auto tok = trim(current_token);
 				if (tok != "")
 				{
-					tokens.push_back(current_token);
+					TokenPos pos;
+					pos.token = current_token;
+					pos.line = y;
+					pos.start = start_x;
+					pos.end = start_x + current_token.size();
+					tokens.push_back(pos);
 				}
 				current_token = "";
 			}
@@ -1256,22 +1378,39 @@ std::vector<std::string> split(std::string source_code)
 			auto tok = trim(current_token);
 			if (tok != "")
 			{
-				tokens.push_back(tok);
+				TokenPos pos;
+				pos.token = tok;
+				pos.line = y;
+				pos.start = start_x;
+				pos.end = start_x + tok.size();
+				tokens.push_back(pos);
 			}
 			current_token = "";
 			
 			if (symbols.count(c) > 0)
 			{
+				if (current_token == "")
+				{
+					start_x = x;
+				}
 				current_token += c;
 				if (current_token == "=" || current_token == "<" || current_token == ">")
 				{
-					if (tokens.back() == "<" || tokens.back() == ">" || tokens.back() == "=" || tokens.back() == "!")
+					auto back = tokens.back().token;
+					if (back == "<" || back == ">" || back == "=" || back == "!")
 					{
-						current_token = tokens.back() + c;
+						current_token = back + c;
 						tokens.pop_back();
 					}
 				}
-				tokens.push_back(current_token);
+
+				TokenPos pos;
+				pos.token = current_token;
+				pos.line = y;
+				pos.start = start_x;
+				pos.end = start_x + current_token.size();
+
+				tokens.push_back(pos);
 				current_token = "";
 			}
 		}
@@ -1279,13 +1418,18 @@ std::vector<std::string> split(std::string source_code)
 
 	if (current_token.size() > 0)
 	{
-		tokens.push_back(current_token);
+		TokenPos pos;
+		pos.token = current_token;
+		pos.line = y;
+		pos.start = start_x;
+		pos.end = start_x + current_token.size();
+		tokens.push_back(pos);
 	}
 
 	return tokens;
 }
 
-std::deque<Token> tokenize(std::vector<std::string> text_tokens)
+std::deque<Token> tokenize(std::vector<TokenPos> token_pos)
 {
 	static std::unordered_set<std::string> keywords{ 
 		"create", "entity", "with", "without", 
@@ -1302,12 +1446,19 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 	};
 
 	std::deque<Token> tokens;
-	for (auto tok : text_tokens)
+	for (auto current_token : token_pos)
 	{
-		if (keywords.count(tok) > 0)
+		auto tok = current_token.token;
+
+		if (keywords.count(current_token.token) > 0)
 		{
 			Token token;
+			token.line = current_token.line;
+			token.start = current_token.start;
+			token.end = current_token.end;
+
 			token.type = EToken::Keyword;
+			
 			if (tok == "create")
 				token.keyword = EKeyword::Create;
 			else if (tok == "entity")
@@ -1352,6 +1503,10 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 		else if (symbols.count(tok) > 0)
 		{
 			Token token;
+			token.line = current_token.line;
+			token.start = current_token.start;
+			token.end = current_token.end;
+
 			if (tok == "(")
 				token.type = EToken::OpenParen;
 			else if (tok == ")")
@@ -1399,6 +1554,11 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 		else if (std::isdigit(tok[0]))
 		{
 			Token token;
+			
+			token.line = current_token.line;
+			token.start = current_token.start;
+			token.end = current_token.end;
+
 			token.type = EToken::Number;
 			token.number = std::atoi(tok.c_str());
 			tokens.push_back(token);
@@ -1406,6 +1566,11 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 		else
 		{
 			Token token;
+			
+			token.line = current_token.line;
+			token.start = current_token.start;
+			token.end = current_token.end;
+
 			token.type = EToken::Quote;
 			token.quote = tok;
 			tokens.push_back(token);
@@ -1425,7 +1590,10 @@ void digest(std::deque<Token>& tokens, EToken type)
 	auto& tok = tokens.front();
 	if (tok.type != type)
 	{
-		parse_error = std::make_optional(string_format("Expected token type %s, but %s found instead.", stringify_token(type).c_str(), stringify_token(tok.type).c_str()));
+		ParseError p;
+		p.text = string_format("Expected token type %s, but %s found instead.", stringify_token(type).c_str(), stringify_token(tok.type).c_str());
+		p.token = tok;
+		generic_parse_error = p;
 		return;
 	}
 	tokens.pop_front();
@@ -1450,13 +1618,19 @@ void digest_keyword(std::deque<Token>& tokens, EKeyword keyword)
 	auto& tok = tokens.front();
 	if (tok.type != EToken::Keyword)
 	{
-		parse_error = std::make_optional(string_format("Expected variable name, found %s instead", stringify_token(tok.type).c_str()));
+		ParseError p;
+		p.text = string_format("Expected variable name, found %s instead", stringify_token(tok.type).c_str());
+		p.token = tok;
+		generic_parse_error = p;
 		return;
 	}
 
 	if (tok.keyword != keyword)
 	{
-		parse_error = std::make_optional(string_format("Keyword %s expected, %s found.", stringify_keyword(keyword).c_str(), stringify_keyword(tok.keyword).c_str()));
+		ParseError p;
+		p.text = string_format("Keyword %s expected, %s found.", stringify_keyword(keyword).c_str(), stringify_keyword(tok.keyword).c_str());
+		p.token = tok;
+		generic_parse_error = p;
 		return;
 	}
 	tokens.pop_front();
@@ -1467,7 +1641,10 @@ void expect(std::deque<Token>& tokens, EToken type)
 	auto& tok = tokens.front();
 	if(tok.type != type)
 	{
-		parse_error = std::make_optional(string_format("Expected token type %s, but %s found instead.", stringify_token(type).c_str(), stringify_token(tok.type).c_str()));
+		ParseError p;
+		p.text = string_format("Expected token type %s, but %s found instead.", stringify_token(type).c_str(), stringify_token(tok.type).c_str());
+		p.token = tok;
+		generic_parse_error = p;
 		return;
 	}
 }
@@ -1482,10 +1659,14 @@ std::string digest_quote(std::deque<Token>& tokens)
 
 EType parse_type_name(std::deque<Token>& tokens)
 {
+	auto tok = tokens.front();
 	auto type_name = digest_quote(tokens);
 	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool")
 	{
-		parse_error = std::make_optional(string_format("Expected either int, ref, float, or bool found %s instead.", type_name.c_str()));
+		ParseError p;
+		p.text = string_format("Expected either int, ref, float, or bool found %s instead.", type_name.c_str());
+		p.token = tok;
+		generic_parse_error = p;
 		return EType::Null;
 	}
 
@@ -1532,10 +1713,8 @@ std::shared_ptr<Expr> parse_atom(std::deque<Token>& tokens)
 	{
 		return std::shared_ptr<Expr>(new BoolExpr(false));
 	}
-	else
-	{
-		return nullptr;
-	}
+	
+	return nullptr;
 }
 
 std::shared_ptr<Expr> parse_arithmetic_factor(std::deque<Token>& tokens)
@@ -1659,6 +1838,7 @@ CompParamCtor parse_comp_params_ctor(std::deque<Token>& tokens)
 // "define Position(x: int, y: int);"
 std::shared_ptr<Statement> parse_comp_define(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Define);
 	auto comp_name = digest_quote(tokens);
 	std::vector<std::tuple<std::string, EType>> members;
@@ -1676,14 +1856,16 @@ std::shared_ptr<Statement> parse_comp_define(std::deque<Token>& tokens)
 		}
 		digest(tokens, EToken::ClosedParen);
 	}
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
-	return std::make_shared<DefineComponentStatement>(comp_name, members);
+	return std::make_shared<DefineComponentStatement>(std::tuple{ start, end }, comp_name, members);
 }
 
 //"create player-character with Position(x: 10, y: 10), Mass(kg: 1), Player();"
 std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Create);
 	auto entity_name = digest_quote(tokens);
 	digest_keyword(tokens, EKeyword::With);
@@ -1694,9 +1876,10 @@ std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 		comps.push_back(parse_comp_ctor(tokens));
 		maybe_digest(tokens, EToken::Comma);
 	}
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
-	return std::make_shared<CreateEntityStatement>(entity_name, comps);
+	return std::make_shared<CreateEntityStatement>(std::tuple{ start, end }, entity_name, comps);
 }
 
 std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
@@ -1704,10 +1887,12 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
 //"if(something) { ... } else { ... }
 std::shared_ptr<Statement> parse_if(std::deque<Token>& tokens)
 {
+	auto start_tok = tokens.front();	
 	digest_keyword(tokens, EKeyword::If);
 	digest(tokens, EToken::OpenParen);
 	auto& expr = parse_expr(tokens);
 	digest(tokens, EToken::ClosedParen);
+	auto end_tok = tokens.front();
 	digest(tokens, EToken::OpenBrace);
 	auto& then_block = parse_block(tokens);
 	std::vector<std::shared_ptr<Statement>> else_block;
@@ -1718,25 +1903,29 @@ std::shared_ptr<Statement> parse_if(std::deque<Token>& tokens)
 		digest_keyword(tokens, EKeyword::Else);
 		digest(tokens, EToken::OpenBrace);
 		else_block = parse_block(tokens);
+		end_tok = tokens.front();
 		digest(tokens, EToken::ClosedBrace);
 	}
-
-	return std::shared_ptr<Statement>(new IfStatement(expr, then_block, else_block));
+	
+	return std::shared_ptr<Statement>(new IfStatement({ start_tok, end_tok }, expr, then_block, else_block));
 }
 
 //"destroy player-character;"
 std::shared_ptr<Statement> parse_destroy_entity(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Destroy);
 	auto entity_name = digest_quote(tokens);
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
-	return std::make_shared<DestroyEntityStatement>(entity_name);
+	return std::make_shared<DestroyEntityStatement>(std::tuple{ start, end }, entity_name);
 }
 
 //"attach Player(x: 2, y: 3) to player-character;"
 std::shared_ptr<Statement> parse_attach_entity(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Attach);
 	std::vector<CompCtor> comps;
 	while (tokens.front().keyword != EKeyword::To)
@@ -1746,14 +1935,16 @@ std::shared_ptr<Statement> parse_attach_entity(std::deque<Token>& tokens)
 	}
 	digest_keyword(tokens, EKeyword::To);
 	auto entity_name = digest_quote(tokens);
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
-	return std::make_shared<AttachStatement>(entity_name, comps);
+	return std::make_shared<AttachStatement>(std::tuple{ start, end }, entity_name, comps);
 }
 
 //"detach Player from player-character;"
 std::shared_ptr<Statement> parse_detach_entity(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Detach);
 	std::vector<std::string> comps;
 	while (tokens.front().keyword != EKeyword::From)
@@ -1763,9 +1954,10 @@ std::shared_ptr<Statement> parse_detach_entity(std::deque<Token>& tokens)
 	}
 	digest_keyword(tokens, EKeyword::From);
 	auto entity_name = digest_quote(tokens);
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
-	return std::make_shared<DetachStatement>(entity_name, comps);
+	return std::make_shared<DetachStatement>(std::tuple{ start, end }, entity_name, comps);
 }
 
 std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
@@ -1773,6 +1965,7 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
 // "system Physics[] { }
 std::shared_ptr<Statement> parse_system(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::System);
 	auto system_name = digest_quote(tokens);
 	if (maybe_digest(tokens, EToken::OpenBracket))
@@ -1782,14 +1975,15 @@ std::shared_ptr<Statement> parse_system(std::deque<Token>& tokens)
 	}
 	digest(tokens, EToken::OpenBrace);
 	auto block = parse_block(tokens);
+	auto end = tokens.front();
 	digest(tokens, EToken::ClosedBrace);
-
-	return std::shared_ptr<Statement>(new DefineSystemStatement(system_name, block));
+	return std::shared_ptr<Statement>(new DefineSystemStatement({ start, end }, system_name, block));
 }
 
 // "foreach player with Position(x, y), Player without Mass { }"
 std::shared_ptr<Statement> parse_foreach(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Foreach);
 	auto entity_name = digest_quote(tokens);
 	std::vector<CompParamCtor> positive_comps;
@@ -1826,19 +2020,21 @@ std::shared_ptr<Statement> parse_foreach(std::deque<Token>& tokens)
 
 	digest(tokens, EToken::OpenBrace);
 	auto block = parse_block(tokens);
+	auto end = tokens.front();
 	digest(tokens, EToken::ClosedBrace);
-
-	return std::shared_ptr<Statement>(new QueryEntitiesStatement(entity_name, positive_comps, negative_comps, block));
+	return std::shared_ptr<Statement>(new QueryEntitiesStatement({ start, end }, entity_name, positive_comps, negative_comps, block));
 }
 
 // "print();"
 std::shared_ptr<Statement> parse_print(std::deque<Token>& tokens)
 {
+	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Print);
 	digest(tokens, EToken::OpenParen);
 	digest(tokens, EToken::ClosedParen);
+	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
-	return std::shared_ptr<Statement>(new PrintContextStatement());
+	return std::shared_ptr<Statement>(new PrintContextStatement({ start, end }));
 }
 
 std::vector<std::shared_ptr<Statement>> parse(std::string input)
@@ -1854,9 +2050,22 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 {
 	std::vector<std::shared_ptr<Statement>> statements;
 
-	while (!tokens.empty() && tokens.front().type == EToken::Keyword)
+	while (!tokens.empty())
 	{
-		if (parse_error.has_value()) return statements;
+		if (tokens.front().type != EToken::Keyword)
+		{
+			if (tokens.front().type == EToken::Quote)
+			{
+				ParseError p;
+				p.text = string_format("Keyword expected, unknown identifier '%s' found.", tokens.front().quote.c_str());
+				p.token = tokens.front();
+				generic_parse_error = p;
+			}
+
+			break;
+		}
+
+		if (generic_parse_error.has_value()) return statements;
 
 		auto tok = tokens.front();
 		if (tok.keyword == EKeyword::Define)
@@ -1902,4 +2111,35 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 	}
 
 	return statements;
+}
+
+std::vector<std::shared_ptr<Statement>> parse_file(Context& ctx, std::string filename)
+{
+	std::ifstream file_stream(filename);
+	if (file_stream.is_open())
+	{
+		std::string line;
+		while (std::getline(file_stream, line))
+		{
+			ctx.source_lines.push_back(line);
+		}
+
+		std::stringstream joined;
+		std::copy(ctx.source_lines.begin(), ctx.source_lines.end(),
+			std::ostream_iterator<std::string>(joined, "\n"));
+
+		ctx.source_text = joined.str();
+		ctx.interpreted_statements = parse(ctx.source_text);
+
+		if (ctx.is_parse_okay())
+		{
+			ctx.execute();
+		}
+		else
+		{
+			ctx.die_with_error();
+		}
+
+		return ctx.interpreted_statements;
+	}
 }
