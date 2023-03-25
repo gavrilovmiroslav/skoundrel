@@ -56,6 +56,8 @@ enum class EToken
 	Minus,
 	Mult,
 	Div,
+	True,
+	False,
 };
 
 enum class EKeyword
@@ -84,11 +86,13 @@ struct Token
 	EKeyword keyword;
 	std::string quote;
 	int number;
+	bool boolean;
 };
 
 enum class EType
 {
 	Null,
+	Bool,
 	Entity,
 	Int,
 	Float,
@@ -99,6 +103,7 @@ std::string stringify_type(EType type)
 	switch (type)
 	{
 	case EType::Entity: return "Entity";
+	case EType::Bool: return "Bool";
 	case EType::Int: return "Int";
 	case EType::Float: return "Float";
 	case EType::Null: default: return "Null";
@@ -126,7 +131,9 @@ std::string stringify_token(EToken token)
 	case EToken::Plus: return "plus";
 	case EToken::Minus: return "minus";
 	case EToken::Mult: return "mult";
-	case EToken::Div: default: return "div";
+	case EToken::Div: return "div";
+	case EToken::True: return "true";
+	case EToken::False: default: return "false";
 	}
 }
 
@@ -160,6 +167,7 @@ struct TypedValue
 		entt::entity entity_value;
 		int int_value;
 		float float_value;
+		bool bool_value;
 	} data;
 };
 
@@ -172,6 +180,10 @@ static const TypedValue operator+(const TypedValue& lhs, const TypedValue& rhs)
 	TypedValue res;
 	switch (lhs.type)
 	{	
+	case EType::Bool:
+		res.type = EType::Bool;
+		res.data.bool_value = lhs.data.bool_value || rhs.data.bool_value;
+		break;
 	case EType::Int: 
 		res.type = EType::Int;
 		res.data.int_value = lhs.data.int_value + rhs.data.int_value;
@@ -190,6 +202,7 @@ static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -214,6 +227,10 @@ static const TypedValue operator*(const TypedValue& lhs, const TypedValue& rhs)
 	TypedValue res;
 	switch (lhs.type)
 	{
+	case EType::Bool:
+		res.type = EType::Bool;
+		res.data.bool_value = lhs.data.bool_value && rhs.data.bool_value;
+		break;
 	case EType::Int:
 		res.type = EType::Int;
 		res.data.int_value = lhs.data.int_value * rhs.data.int_value;
@@ -232,6 +249,7 @@ static const TypedValue operator/(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -257,6 +275,7 @@ static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Float) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -303,6 +322,27 @@ struct Expr
 {
 	virtual TypedValue eval(Context& ctx) = 0;
 	virtual std::string to_string(Context& ctx) = 0;
+};
+
+struct BoolExpr : public Expr
+{
+	bool val;
+
+	BoolExpr(bool b) : val(b)
+	{}
+
+	TypedValue eval(Context& ctx) override
+	{
+		TypedValue v;
+		v.type = EType::Bool;
+		v.data.bool_value = val;
+		return v;
+	}
+
+	std::string to_string(Context& ctx) override
+	{
+		return val ? "true" : "false";
+	}
 };
 
 struct IntExpr : public Expr
@@ -702,6 +742,7 @@ struct DefineComponentStatement : public Statement
 		{
 			switch (v)
 			{
+			case EType::Bool: comp_members.push_back({ k, EComponentMember::Bool }); break;
 			case EType::Entity: comp_members.push_back({ k, EComponentMember::EntityRef }); break;
 			case EType::Int: comp_members.push_back({ k, EComponentMember::Int }); break;
 			case EType::Float: comp_members.push_back({ k, EComponentMember::Float }); break;
@@ -741,7 +782,15 @@ struct CreateEntityStatement : public Statement
 
 				switch (type.members[i].kind)
 				{
-				case EComponentMember::Int:		
+				case EComponentMember::Bool:
+					if (typed_val.type != EType::Bool)
+					{
+						ctx.error = std::make_optional(string_format("Expected bool, got %s", stringify_type(typed_val.type).c_str()));
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, Bool{ typed_val.data.bool_value });
+					break;
+				case EComponentMember::Int:
 					if (typed_val.type != EType::Int)
 					{
 						ctx.error = std::make_optional(string_format("Expected int, got %s", stringify_type(typed_val.type).c_str()));
@@ -957,6 +1006,8 @@ struct QueryEntitiesStatement : public Statement
 		auto& query = ecs_query(*ctx.ecs, positive_names, negative_names);
 		for (auto entity : query)
 		{
+			if (!ctx.ecs->registry.valid(entity)) continue;
+
 			ctx.scope->push_scope();
 			ctx.scope->add_binding(entity_name, std::shared_ptr<EntityExpr>(new EntityExpr(entity)));
 
@@ -975,7 +1026,10 @@ struct QueryEntitiesStatement : public Statement
 
 						switch (value.kind)
 						{
-						case EComponentMember::Int: 
+						case EComponentMember::Bool:
+							expr_value.reset(new BoolExpr(value.data.b.value));
+							break;
+						case EComponentMember::Int:
 							expr_value.reset(new IntExpr(value.data.i.value));
 							break;
 						case EComponentMember::Float: 
@@ -1090,7 +1144,7 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 		"create", "entity", "with", "without", 
 		"foreach", "query", "define", "print", 
 		"system", "destroy", "attach", "detach",
-		"get", "to", "from",
+		"get", "to", "from", "true", "false"
 	};
 	static std::unordered_set<std::string> symbols{ "(", ")", ",", ";", ":", "[", "]", "_", "@", "+", "-", "*", "/", "{", "}" };
 
@@ -1131,6 +1185,10 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 				token.keyword = EKeyword::To;
 			else if (tok == "from")
 				token.keyword = EKeyword::From;
+			else if (tok == "false" || tok == "true")
+			{
+				token.type = tok == "true" ? EToken::True : EToken::False;
+			}
 			tokens.push_back(token);
 		}
 		else if (symbols.count(tok) > 0)
@@ -1256,13 +1314,17 @@ std::string digest_quote(std::deque<Token>& tokens)
 EType parse_type_name(std::deque<Token>& tokens)
 {
 	auto type_name = digest_quote(tokens);
-	if (type_name != "int" && type_name != "ref" && type_name != "float")
+	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool")
 	{
-		parse_error = std::make_optional(string_format("Expected either int, ref, or float, found %s instead.", type_name.c_str()));
+		parse_error = std::make_optional(string_format("Expected either int, ref, float, or bool found %s instead.", type_name.c_str()));
 		return EType::Null;
 	}
 
-	if (type_name == "int")
+	if (type_name == "bool")
+	{
+		return EType::Bool;
+	}
+	else if (type_name == "int")
 	{
 		return EType::Int;
 	}
@@ -1293,6 +1355,18 @@ std::shared_ptr<Expr> parse_atom(std::deque<Token>& tokens)
 	{
 		return std::shared_ptr<Expr>(new VarExpr(tok.quote));
 	}
+	else if (tok.type == EToken::True)
+	{
+		return std::shared_ptr<Expr>(new BoolExpr(true));
+	}
+	else if (tok.type == EToken::False)
+	{
+		return std::shared_ptr<Expr>(new BoolExpr(false));
+	}
+	else
+	{
+		return nullptr;
+	}
 }
 
 std::shared_ptr<Expr> parse_arithmetic_factor(std::deque<Token>& tokens)
@@ -1319,8 +1393,8 @@ std::shared_ptr<Expr> parse_arithmetic_operand(std::deque<Token>& tokens)
 		auto op_tok = tokens.front();
 		advance(tokens);
 		auto rhs = parse_arithmetic_factor(tokens);
-
-		lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Plus ? EArithmetic::Add : EArithmetic::Sub, lhs, rhs));
+		if (rhs != nullptr)
+			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Plus ? EArithmetic::Add : EArithmetic::Sub, lhs, rhs));
 	}
 
 	return lhs;
@@ -1335,8 +1409,8 @@ std::shared_ptr<Expr> parse_expr(std::deque<Token>& tokens)
 		auto op_tok = tokens.front();
 		advance(tokens);
 		auto rhs = parse_arithmetic_operand(tokens);
-
-		lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Mult ? EArithmetic::Mult : EArithmetic::Div, lhs, rhs));
+		if (rhs != nullptr)
+			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Mult ? EArithmetic::Mult : EArithmetic::Div, lhs, rhs));
 	}
 
 	return lhs;

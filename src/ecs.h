@@ -20,6 +20,11 @@ struct Float
 	float value;
 };
 
+struct Bool
+{
+	bool value;
+};
+
 using comp_entity = entt::entity;
 using instance_entity = entt::entity;
 using type_entity = entt::entity;
@@ -27,6 +32,7 @@ using type_entity = entt::entity;
 enum class EComponentMember
 {
 	None = 0,
+	Bool,
 	EntityRef,
 	Int,	
 	Float,
@@ -48,6 +54,7 @@ struct ComponentMember
 		EntityRef e;
 		Int i;
 		Float f;
+		Bool b;
 	} data;
 };
 
@@ -121,8 +128,25 @@ instance_entity ecs_create_instance(ECS& ecs)
 
 void ecs_destroy_instance(ECS& ecs, instance_entity entity)
 {
-	auto version = ecs.registry.current(entity);
-	ecs.registry.destroy(entity, version);
+	printf("ECS destroyed entity #%d\n", entity);
+
+	for (auto& [e, ct] : ecs.registry.view<ComponentType>().each())
+	{
+		if (ct.adorned_entities.find(entity) != ct.adorned_entities.end())
+		{
+			ct.adorned_entities.remove(entity);
+		}
+	}
+
+	for (auto& [e, c] : ecs.registry.view<Component>().each())
+	{
+		if (c.key_id == entity)
+		{
+			ecs.registry.destroy(e);
+		}
+	}
+
+	ecs.registry.destroy(entity);
 }
 
 comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_name)
@@ -133,7 +157,7 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 
 	auto entity = ecs.registry.create();
 
-	auto& instance = ecs.registry.emplace<Component>(entity);
+	auto& instance = ecs.registry.emplace_or_replace<Component>(entity);
 	instance.key_id = key;
 	instance.type_id = type;
 
@@ -159,6 +183,9 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 		case EComponentMember::Float:
 			member.data.f.value = 0.0f;
 			break;
+		case EComponentMember::Bool:
+			member.data.b.value = false;
+			break;
 		case EComponentMember::Count:
 		case EComponentMember::None:
 			assert(member.kind != EComponentMember::Count && member.kind != EComponentMember::None);
@@ -183,20 +210,14 @@ void ecs_unadorn_instance(ECS& ecs, instance_entity key, std::string type_name)
 	auto& type_def = ecs.registry.get<ComponentType>(type);
 	type_def.adorned_entities.remove(key);
 
-	auto entity = ecs.registry.create();
+	auto& component_reg = ecs.registry.get<Instance>(key);
+	auto& comp = component_reg.registered.find(type);
 
-	auto& instance = ecs.registry.emplace<Component>(entity);
-	instance.key_id = key;
-	instance.type_id = type;
-
-	std::uint8_t index = 0;
-
-	auto& instance_reg = ecs.registry.get<Instance>(key);
-	const auto& comp = instance_reg.registered.find(type);
-	if (comp != instance_reg.registered.end())
+	if (comp != component_reg.registered.end())
 	{
+		printf("Destroyed entity #%d\n", comp->second);
 		ecs.registry.destroy(comp->second);
-		instance_reg.registered.erase(comp->first);
+		component_reg.registered.erase(comp->first);
 	}
 }
 
@@ -240,6 +261,14 @@ void ecs_set_member_in_component(Component& comp, std::string member_name, Float
 	auto member_index = comp.member_index.find(member_name)->second;
 	assert(comp.members[member_index].kind == EComponentMember::Float);
 	comp.members[member_index].data.f = i;
+}
+
+template<>
+void ecs_set_member_in_component(Component& comp, std::string member_name, Bool b)
+{
+	auto member_index = comp.member_index.find(member_name)->second;
+	assert(comp.members[member_index].kind == EComponentMember::Bool);
+	comp.members[member_index].data.b = b;
 }
 
 entt::sparse_set ecs_query(ECS& ecs, std::vector<std::string> positive, std::vector<std::string> negative = {})
