@@ -58,10 +58,13 @@ enum class EToken
 	Div,
 	True,
 	False,
+	Lt, Le, Eq, Ne, Ge, Gt,
 };
 
 enum class EKeyword
 {
+	If,
+	Else,
 	Define,
 	Create,
 	Entity,
@@ -132,7 +135,13 @@ std::string stringify_token(EToken token)
 	case EToken::Minus: return "minus";
 	case EToken::Mult: return "mult";
 	case EToken::Div: return "div";
-	case EToken::True: return "true";
+	case EToken::True: return "true";	
+	case EToken::Lt: return "<";
+	case EToken::Le: return "<=";
+	case EToken::Eq: return "==";
+	case EToken::Ne: return "!=";
+	case EToken::Ge: return ">=";
+	case EToken::Gt: return ">";
 	case EToken::False: default: return "false";
 	}
 }
@@ -141,6 +150,8 @@ std::string stringify_keyword(EKeyword keyword)
 {
 	switch (keyword)
 	{
+	case EKeyword::If: return "if";
+	case EKeyword::Else: return "else";
 	case EKeyword::Define: return "define";
 	case EKeyword::Create: return "create";
 	case EKeyword::Entity: return "entity";
@@ -288,6 +299,34 @@ static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
 
 	return res;
 }
+
+#define LOGICAL_OP(_op_) \
+static const TypedValue operator _op_(const TypedValue& lhs, const TypedValue& rhs) \
+{ \
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null }; \
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null }; \
+	if (lhs.type == EType::Entity) return TypedValue{ EType::Null }; \
+	if (lhs.type == EType::Bool) return TypedValue{ EType::Null }; \
+	TypedValue res; \
+	res.type = EType::Bool; \
+	switch (lhs.type) \
+	{ \
+	case EType::Int: \
+		res.data.bool_value = lhs.data.int_value _op_ rhs.data.int_value; \
+		break; \
+	case EType::Float: \
+		res.data.bool_value = lhs.data.float_value _op_ rhs.data.float_value; \
+		break; \
+	} \
+	return res; \
+} \
+
+LOGICAL_OP(<);
+LOGICAL_OP(<=);
+LOGICAL_OP(==);
+LOGICAL_OP(!=);
+LOGICAL_OP(>=);
+LOGICAL_OP(>);
 
 struct Scope;
 struct Statement;
@@ -455,7 +494,63 @@ struct CompMemberRefExpr : public Expr
 
 enum class EArithmetic
 {
-	Add, Sub, Mult, Div, Mod
+	Add, Sub, Mult, Div, Mod,
+};
+
+enum class ELogical
+{
+	Lt, Le, Eq, Ne, Ge, Gt,
+};
+
+struct LogicalExpr : public Expr
+{
+	ELogical op;
+	std::shared_ptr<Expr> lhs;
+	std::shared_ptr<Expr> rhs;
+
+	LogicalExpr(ELogical op, std::shared_ptr<Expr> l, std::shared_ptr<Expr> r)
+		: op(op)
+		, lhs(l)
+		, rhs(r)
+	{}
+
+	TypedValue eval(Context& ctx) override
+	{
+		switch (op)
+		{
+		case ELogical::Lt:
+			return lhs->eval(ctx) < rhs->eval(ctx);
+		case ELogical::Le:
+			return lhs->eval(ctx) <= rhs->eval(ctx);
+		case ELogical::Eq:
+			return lhs->eval(ctx) == rhs->eval(ctx);
+		case ELogical::Ne:
+			return lhs->eval(ctx) != rhs->eval(ctx);
+		case ELogical::Ge:
+			return lhs->eval(ctx) >= rhs->eval(ctx);
+		case ELogical::Gt:
+			return lhs->eval(ctx) > rhs->eval(ctx);
+		}
+	}
+
+	std::string to_string(Context& ctx) override
+	{
+		switch (op)
+		{
+		case ELogical::Lt:
+			return lhs->to_string(ctx) + " < " + rhs->to_string(ctx);
+		case ELogical::Le:
+			return lhs->to_string(ctx) + " <= " + rhs->to_string(ctx);
+		case ELogical::Eq:
+			return lhs->to_string(ctx) + " == " + rhs->to_string(ctx);
+		case ELogical::Ne:
+			return lhs->to_string(ctx) + " != " + rhs->to_string(ctx);
+		case ELogical::Ge:
+			return lhs->to_string(ctx) + " >= " + rhs->to_string(ctx);
+		case ELogical::Gt:
+			return lhs->to_string(ctx) + " > " + rhs->to_string(ctx);
+		}
+	}
 };
 
 struct ArithExpr : public Expr
@@ -694,6 +789,50 @@ void Context::update()
 System::System(std::string name, std::vector<std::shared_ptr<Statement>> block)
 	: name(name), block(block)
 {}
+
+struct IfStatement : public Statement
+{
+	std::shared_ptr<Expr> condition;
+	std::vector<std::shared_ptr<Statement>> then_branch;
+	std::vector<std::shared_ptr<Statement>> else_branch;
+
+	IfStatement(std::shared_ptr<Expr> cond, 
+		std::vector<std::shared_ptr<Statement>> then_block, 
+		std::vector<std::shared_ptr<Statement>> else_block)
+		: condition(cond)
+		, then_branch(then_block)
+		, else_branch(else_block)
+	{}
+
+	void execute(Context& ctx) override
+	{
+		const auto& cond = condition->eval(ctx);
+		if (cond.type != EType::Bool)
+		{
+			ctx.error = std::make_optional(string_format("Condition must be a boolean, %s found instead", stringify_type(cond.type)));
+			return;
+		}
+
+		if (cond.data.bool_value)
+		{
+			ctx.depth++;
+			for (auto statement : then_branch)
+			{
+				statement->execute(ctx);
+			}
+			ctx.depth--;
+		}
+		else
+		{
+			ctx.depth++;
+			for (auto statement : else_branch)
+			{
+				statement->execute(ctx);
+			}
+			ctx.depth--;
+		}
+	}
+};
 
 struct DefineSystemStatement : public Statement
 {
@@ -1087,7 +1226,7 @@ std::string trim(const std::string& s) {
 
 std::vector<std::string> split(std::string source_code)
 {
-	static std::unordered_set<char> symbols{ '(', ')', ',', ';', ':', '[', ']', '_', '@', '+', '-', '*', '/', '{', '}' };
+	static std::unordered_set<char> symbols{ '(', ')', ',', ';', ':', '[', ']', '_', '@', '+', '-', '*', '/', '{', '}', '<', '>', '=', '!'};
 
 	std::vector<std::string> tokens;
 	std::string current_token{};
@@ -1124,6 +1263,14 @@ std::vector<std::string> split(std::string source_code)
 			if (symbols.count(c) > 0)
 			{
 				current_token += c;
+				if (current_token == "=" || current_token == "<" || current_token == ">")
+				{
+					if (tokens.back() == "<" || tokens.back() == ">" || tokens.back() == "=" || tokens.back() == "!")
+					{
+						current_token = tokens.back() + c;
+						tokens.pop_back();
+					}
+				}
 				tokens.push_back(current_token);
 				current_token = "";
 			}
@@ -1144,9 +1291,15 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 		"create", "entity", "with", "without", 
 		"foreach", "query", "define", "print", 
 		"system", "destroy", "attach", "detach",
-		"get", "to", "from", "true", "false"
+		"get", "to", "from", "true", "false",
+		"if", "else"
 	};
-	static std::unordered_set<std::string> symbols{ "(", ")", ",", ";", ":", "[", "]", "_", "@", "+", "-", "*", "/", "{", "}" };
+	
+	static std::unordered_set<std::string> symbols{ 
+		"(", ")", ",", ";", ":", "[", "]", 
+		"_", "@", "+", "-", "*", "/", "{", "}",
+		"<", "<=", "==", "!=", ">=", ">"
+	};
 
 	std::deque<Token> tokens;
 	for (auto tok : text_tokens)
@@ -1185,10 +1338,15 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 				token.keyword = EKeyword::To;
 			else if (tok == "from")
 				token.keyword = EKeyword::From;
-			else if (tok == "false" || tok == "true")
-			{
-				token.type = tok == "true" ? EToken::True : EToken::False;
-			}
+			else if (tok == "if")
+				token.keyword = EKeyword::If;
+			else if (tok == "else")
+				token.keyword = EKeyword::Else;
+			else if (tok == "false")
+				token.type = EToken::False;
+			else if (tok == "true") 
+				token.type = EToken::True;
+
 			tokens.push_back(token);
 		}
 		else if (symbols.count(tok) > 0)
@@ -1224,7 +1382,18 @@ std::deque<Token> tokenize(std::vector<std::string> text_tokens)
 				token.type = EToken::OpenBrace;
 			else if (tok == "}")
 				token.type = EToken::ClosedBrace;
-
+			else if (tok == "<")
+				token.type = EToken::Lt;
+			else if (tok == "<=")
+				token.type = EToken::Le;
+			else if (tok == "==")
+				token.type = EToken::Eq;
+			else if (tok == "!=")
+				token.type = EToken::Ne;
+			else if (tok == ">")
+				token.type = EToken::Gt;
+			else if (tok == ">=")
+				token.type = EToken::Ge;
 			tokens.push_back(token);
 		}
 		else if (std::isdigit(tok[0]))
@@ -1400,7 +1569,7 @@ std::shared_ptr<Expr> parse_arithmetic_operand(std::deque<Token>& tokens)
 	return lhs;
 }
 
-std::shared_ptr<Expr> parse_expr(std::deque<Token>& tokens)
+std::shared_ptr<Expr> parse_logical_operand(std::deque<Token>& tokens)
 {
 	auto lhs = parse_arithmetic_operand(tokens);
 
@@ -1411,6 +1580,32 @@ std::shared_ptr<Expr> parse_expr(std::deque<Token>& tokens)
 		auto rhs = parse_arithmetic_operand(tokens);
 		if (rhs != nullptr)
 			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Mult ? EArithmetic::Mult : EArithmetic::Div, lhs, rhs));
+	}
+
+	return lhs;
+}
+
+std::shared_ptr<Expr> parse_expr(std::deque<Token>& tokens)
+{
+	static std::unordered_map<std::string, ELogical> log_ops{
+	{ "<", ELogical::Lt },
+	{ "<=", ELogical::Le },
+	{ "==", ELogical::Eq },
+	{ "!=", ELogical::Ne },
+	{ ">=", ELogical::Ge },
+	{ ">", ELogical::Gt }
+	};
+
+	auto lhs = parse_logical_operand(tokens);
+
+	if (log_ops.count(stringify_token(tokens.front().type)) > 0)
+	{
+		auto op = log_ops[stringify_token(tokens.front().type)];
+		auto op_tok = tokens.front();
+		advance(tokens);
+		auto rhs = parse_logical_operand(tokens);
+		if (rhs != nullptr)
+			lhs = std::shared_ptr<LogicalExpr>(new LogicalExpr(op, lhs, rhs));
 	}
 
 	return lhs;
@@ -1504,6 +1699,31 @@ std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 	return std::make_shared<CreateEntityStatement>(entity_name, comps);
 }
 
+std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens);
+
+//"if(something) { ... } else { ... }
+std::shared_ptr<Statement> parse_if(std::deque<Token>& tokens)
+{
+	digest_keyword(tokens, EKeyword::If);
+	digest(tokens, EToken::OpenParen);
+	auto& expr = parse_expr(tokens);
+	digest(tokens, EToken::ClosedParen);
+	digest(tokens, EToken::OpenBrace);
+	auto& then_block = parse_block(tokens);
+	std::vector<std::shared_ptr<Statement>> else_block;
+
+	digest(tokens, EToken::ClosedBrace);
+	if (tokens.front().keyword == EKeyword::Else)
+	{
+		digest_keyword(tokens, EKeyword::Else);
+		digest(tokens, EToken::OpenBrace);
+		else_block = parse_block(tokens);
+		digest(tokens, EToken::ClosedBrace);
+	}
+
+	return std::shared_ptr<Statement>(new IfStatement(expr, then_block, else_block));
+}
+
 //"destroy player-character;"
 std::shared_ptr<Statement> parse_destroy_entity(std::deque<Token>& tokens)
 {
@@ -1566,6 +1786,7 @@ std::shared_ptr<Statement> parse_system(std::deque<Token>& tokens)
 
 	return std::shared_ptr<Statement>(new DefineSystemStatement(system_name, block));
 }
+
 // "foreach player with Position(x, y), Player without Mass { }"
 std::shared_ptr<Statement> parse_foreach(std::deque<Token>& tokens)
 {
@@ -1673,6 +1894,10 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 		else if (tok.keyword == EKeyword::System)
 		{
 			statements.push_back(parse_system(tokens));
+		}
+		else if (tok.keyword == EKeyword::If)
+		{
+			statements.push_back(parse_if(tokens));
 		}
 	}
 
