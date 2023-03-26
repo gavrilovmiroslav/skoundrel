@@ -57,6 +57,7 @@ enum class EToken
 	Minus,
 	Mult,
 	Div,
+	Mod,
 	True,
 	False,
 	Lt, Le, Eq, Ne, Ge, Gt,
@@ -145,6 +146,7 @@ std::string stringify_token(EToken token)
 	case EToken::Minus: return "minus";
 	case EToken::Mult: return "mult";
 	case EToken::Div: return "div";
+	case EToken::Mod: return "mod";
 	case EToken::True: return "true";	
 	case EToken::Lt: return "<";
 	case EToken::Le: return "<=";
@@ -231,9 +233,11 @@ static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
 	case EType::Int:
 		res.type = EType::Int;
 		res.data.int_value = lhs.data.int_value - rhs.data.int_value;
+		break;
 	case EType::Float:
 		res.type = EType::Float;
 		res.data.float_value = lhs.data.float_value - rhs.data.float_value;
+		break;
 	}
 
 	return res;
@@ -486,7 +490,7 @@ struct EntityExpr : public Expr
 
 	std::string to_string(Context& ctx) override
 	{
-		return std::string("#") + std::to_string((uint64_t)r.value);
+		return std::string("@") + std::to_string(entt::to_integral(r.value));
 	}
 };
 
@@ -508,13 +512,15 @@ struct VarExpr : public Expr
 struct CompMemberRefExpr : public Expr
 {
 	std::string name;
+	entt::entity entity;
 	Component comp;
 	int param_index;
 
 	std::shared_ptr<Expr> value;
 
-	CompMemberRefExpr(std::string s, Component c, int p, std::shared_ptr<Expr> v)
+	CompMemberRefExpr(std::string s, entt::entity e, Component c, int p, std::shared_ptr<Expr> v)
 		: name(s)
+		, entity(e)
 		, comp(c)
 		, param_index(p)
 		, value(v)
@@ -527,8 +533,8 @@ struct CompMemberRefExpr : public Expr
 
 	std::string to_string(Context& ctx) override
 	{
-		auto& type = ctx.ecs->registry.get<ComponentType>(comp.type_id);	
-		return std::string("&") + type.name + "::" + name + " (" + value->to_string(ctx) + ")";
+		auto& type = ctx.ecs->registry.get<ComponentType>(comp.type_id);
+		return value->to_string(ctx) + " [@" + std::to_string(entt::to_integral((uint64_t)entity)) + "] " + type.name + "::" + name;
 	}
 };
 
@@ -568,7 +574,7 @@ struct LogicalExpr : public Expr
 			return lhs->eval(ctx) != rhs->eval(ctx);
 		case ELogical::Ge:
 			return lhs->eval(ctx) >= rhs->eval(ctx);
-		case ELogical::Gt:
+		case ELogical::Gt: default:
 			return lhs->eval(ctx) > rhs->eval(ctx);
 		}
 	}
@@ -587,7 +593,7 @@ struct LogicalExpr : public Expr
 			return lhs->to_string(ctx) + " != " + rhs->to_string(ctx);
 		case ELogical::Ge:
 			return lhs->to_string(ctx) + " >= " + rhs->to_string(ctx);
-		case ELogical::Gt:
+		case ELogical::Gt: default:
 			return lhs->to_string(ctx) + " > " + rhs->to_string(ctx);
 		}
 	}
@@ -617,7 +623,7 @@ struct ArithExpr : public Expr
 			return lhs->eval(ctx) * rhs->eval(ctx);
 		case EArithmetic::Div:
 			return lhs->eval(ctx) / rhs->eval(ctx);
-		case EArithmetic::Mod:
+		case EArithmetic::Mod: default:
 			return lhs->eval(ctx) % rhs->eval(ctx);
 		}
 	}
@@ -634,7 +640,7 @@ struct ArithExpr : public Expr
 			return lhs->to_string(ctx) + " * " + rhs->to_string(ctx);
 		case EArithmetic::Div:
 			return lhs->to_string(ctx) + " / " + rhs->to_string(ctx);
-		case EArithmetic::Mod:
+		case EArithmetic::Mod: default:
 			return lhs->to_string(ctx) + " % " + rhs->to_string(ctx);
 		}
 	}
@@ -659,15 +665,114 @@ struct Scope
 		}
 	}
 
-	void delete_binding(std::string name)
+	std::optional<entt::entity> internal_rec_delete_binding(std::string name)
 	{
 		if (next)
 		{
-			next->delete_binding(name);
+			auto child_result = next->internal_rec_delete_binding(name);
+			if (child_result == std::nullopt)
+			{
+				if (env.count(name) > 0)
+				{
+					auto e = env.find(name);
+					auto val = e->second;
+					env.erase(name);
+					if (EntityExpr* ee = dynamic_cast<EntityExpr*>(val.get()))
+					{
+						return std::make_optional(ee->r.value);
+					}
+				}
+				else
+				{
+					return std::nullopt;
+				}
+			}
+			else
+			{
+				return child_result;
+			}
 		}
 		else
 		{
-			env.erase(name);
+			if (env.count(name) > 0)
+			{
+				auto e = env.find(name);
+				env.erase(name);
+				if (EntityExpr* ee = dynamic_cast<EntityExpr*>(e->second.get()))
+				{
+					return std::make_optional(ee->r.value);
+				}
+			}
+			else
+			{
+				return std::nullopt;
+			}
+		}
+	}
+
+	void internal_rec_delete_refs(entt::entity e)
+	{
+		std::vector<std::string> to_delete;
+		for (auto& kv : env)
+		{
+			if (EntityExpr* ee = dynamic_cast<EntityExpr*>(kv.second.get()))
+			{
+				if (ee->r.value == e)
+				{
+					to_delete.push_back(kv.first);
+				}
+			}
+			else if (CompMemberRefExpr* ref = dynamic_cast<CompMemberRefExpr*>(kv.second.get()))
+			{
+				if (ref->entity == e)
+				{
+					to_delete.push_back(kv.first);
+				}
+			}
+		}
+
+		for (auto key : to_delete)
+		{
+			env.erase(key);
+		}
+
+		if (next)
+		{
+			next->internal_rec_delete_refs(e);
+		}
+	}
+
+	void internal_rec_delete_comp_ref(entt::entity e, entt::entity comp_type_id)
+	{
+		std::vector<std::string> to_delete;
+		for (auto& kv : env)
+		{
+			if (CompMemberRefExpr* ref = dynamic_cast<CompMemberRefExpr*>(kv.second.get()))
+			{
+				if (ref->entity == e && ref->comp.type_id == comp_type_id)
+				{
+					to_delete.push_back(kv.first);
+				}
+			}
+		}
+
+		for (auto key : to_delete)
+		{
+			env.erase(key);
+		}
+
+		if (next)
+		{
+			next->internal_rec_delete_comp_ref(e, comp_type_id);
+		}
+	}
+
+	void delete_binding(std::string name)
+	{
+		auto result = internal_rec_delete_binding(name);
+		if (result.has_value())
+		{
+			internal_rec_delete_refs(result.value());
 		}
 	}
 
@@ -722,31 +827,25 @@ struct Scope
 	void print(Context& ctx)
 	{
 		auto ptr = next;
-		int i = 0;
-		while (ptr)
-		{
-			i++;
-			ptr = ptr->next;
-		}
-		print(ctx, i);
+		print(ctx, 0);
 	}
 
 private:
 
 	void print(Context& ctx, int indent)
 	{
-		if (next)
-		{
-			next->print(ctx, indent - 1);
-		}
 		for (auto& [name, value] : env)
 		{
 			auto space = std::string(indent, ' ');
 			printf("%s%s: %s\n", space.c_str(), name.c_str(), value->to_string(ctx).c_str());
 		}
+		if (next)
+		{
+			next->print(ctx, indent + 1);
+		}
 	}
 
-	std::unordered_map<std::string, std::shared_ptr<Expr>> env;
+	std::unordered_map<std::string, std::shared_ptr<Expr>> env;	
 	std::shared_ptr<Scope> next;
 };
 
@@ -846,11 +945,14 @@ void Context::die_with_error()
 				printf("  %s\n", this->source_lines[l].c_str());
 		}
 		auto sp = std::string(p.token.start, ' ') + std::string(p.token.end - p.token.start, '^');
-		printf("%s -- (%d:%d) %s\n", sp.c_str(), p.token.line, p.token.start, p.text.c_str());
-		
+		printf("\033[0;31m");
+		printf("%s", sp.c_str());		
+		printf(" -- (%d: %d) %s\n", p.token.line, p.token.start, p.text.c_str());
+		printf("\033[0m");
+
 		for (int i = 0; i < 3; i++)
 		{
-			int l = p.token.line + i + 1;
+			std::size_t l = p.token.line + i + 1;
 			if (l < source_lines.size())
 				printf("  %s\n", this->source_lines[l].c_str());
 		}
@@ -1090,6 +1192,85 @@ struct PrintContextStatement : public Statement
 	}
 };
 
+
+struct GetStatement : public Statement
+{
+	std::string entity_name;
+	std::vector<CompParamCtor> components;
+
+	GetStatement(Range range, std::string name, std::vector<CompParamCtor> comps)
+		: Statement(std::get<0>(range), std::get<1>(range))
+		, entity_name{ name }
+		, components{ comps }
+	{}
+
+	void execute(Context& ctx) override
+	{
+		if (ctx.has_errors()) return;
+
+		auto e = ctx.scope->get_binding(entity_name);
+		if (!e)
+		{
+			ctx.make_interpret_error(string_format("Variable '%s' not found", entity_name.c_str()), this);
+			return;
+		}
+
+		auto entity = dynamic_cast<EntityExpr*>(e.get());
+		if (!entity)
+		{
+			ctx.make_interpret_error(string_format("Expected entity reference, got %s instead.", e->to_string(ctx).c_str()), this);
+			return;
+		}
+
+		ctx.scope->push_scope();
+
+		for (auto& comp_ctor : components)
+		{
+			const auto& comp = ecs_get_component_by_instance(*ctx.ecs, entity->r.value, comp_ctor.comp_name);
+			int index = 0;
+			for (auto& var_param : comp_ctor.params)
+			{
+				if (VarExpr* var = dynamic_cast<VarExpr*>(var_param.get()))
+				{
+					auto& name = var->name;
+					auto& value = comp.members[index];
+
+					std::shared_ptr<Expr> expr_value = nullptr;
+
+					switch (value.kind)
+					{
+					case EComponentMember::Bool:
+						expr_value.reset(new BoolExpr(value.data.b.value));
+						break;
+					case EComponentMember::Int:
+						expr_value.reset(new IntExpr(value.data.i.value));
+						break;
+					case EComponentMember::Float:
+						expr_value.reset(new FloatExpr(value.data.f.value));
+						break;
+					case EComponentMember::EntityRef:
+						expr_value.reset(new EntityExpr(value.data.e.value));
+						break;
+					}
+
+					std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, entity->r.value, comp, index, expr_value));
+					ctx.scope->add_binding(name, ref_expr);
+				}
+				else
+				{
+					if (dynamic_cast<VarExpr*>(var_param.get()) != nullptr)
+					{
+						ctx.make_interpret_error(string_format("Expected variable name."), this);
+						return;
+					}
+				}
+
+				index++;
+			}
+		}
+	}
+};
+
 struct AttachStatement : public Statement
 {
 	std::string entity_name;
@@ -1195,6 +1376,7 @@ struct DetachStatement : public Statement
 		for (auto& comp : components)
 		{
 			ecs_unadorn_instance(*ctx.ecs, entity->r.value, comp);
+			ctx.scope->internal_rec_delete_comp_ref(entity->r.value, ecs_get_type_id(*ctx.ecs, comp));
 		}
 	}
 };
@@ -1268,7 +1450,7 @@ struct QueryEntitiesStatement : public Statement
 							break;
 						}
 
-						std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, comp, index, expr_value));
+						std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, entity, comp, index, expr_value));
 						ctx.scope->add_binding(name, ref_expr);
 					}
 					else
@@ -1332,7 +1514,7 @@ std::vector<TokenPos> split(std::string source_code)
 	std::vector<TokenPos> tokens;
 	std::string current_token{};
 
-	int i = 0;
+	std::size_t i = 0;
 	int x = 0;
 	int y = 1;
 	int start_x = 0;
@@ -1734,15 +1916,21 @@ std::shared_ptr<Expr> parse_arithmetic_factor(std::deque<Token>& tokens)
 
 std::shared_ptr<Expr> parse_arithmetic_operand(std::deque<Token>& tokens)
 {
+	std::unordered_map<EToken, EArithmetic> map{
+		{ EToken::Mult, EArithmetic::Mult },
+		{ EToken::Div, EArithmetic::Div },
+		{ EToken::Mod, EArithmetic::Mod },
+	};
+
 	auto lhs = parse_arithmetic_factor(tokens);
 
-	while (tokens.front().type == EToken::Plus || tokens.front().type == EToken::Minus)
+	while (map.count(tokens.front().type) > 0)
 	{
 		auto op_tok = tokens.front();
 		advance(tokens);
 		auto rhs = parse_arithmetic_factor(tokens);
 		if (rhs != nullptr)
-			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Plus ? EArithmetic::Add : EArithmetic::Sub, lhs, rhs));
+			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(map[op_tok.type], lhs, rhs));
 	}
 
 	return lhs;
@@ -1752,13 +1940,13 @@ std::shared_ptr<Expr> parse_logical_operand(std::deque<Token>& tokens)
 {
 	auto lhs = parse_arithmetic_operand(tokens);
 
-	while (tokens.front().type == EToken::Mult || tokens.front().type == EToken::Div)
+	while (tokens.front().type == EToken::Plus || tokens.front().type == EToken::Minus)
 	{
 		auto op_tok = tokens.front();
 		advance(tokens);
 		auto rhs = parse_arithmetic_operand(tokens);
 		if (rhs != nullptr)
-			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Mult ? EArithmetic::Mult : EArithmetic::Div, lhs, rhs));
+			lhs = std::shared_ptr<ArithExpr>(new ArithExpr(op_tok.type == EToken::Plus ? EArithmetic::Add : EArithmetic::Sub, lhs, rhs));
 	}
 
 	return lhs;
@@ -1868,14 +2056,18 @@ std::shared_ptr<Statement> parse_create_entity(std::deque<Token>& tokens)
 	auto start = tokens.front();
 	digest_keyword(tokens, EKeyword::Create);
 	auto entity_name = digest_quote(tokens);
-	digest_keyword(tokens, EKeyword::With);
-
 	std::vector<CompCtor> comps;
-	while (tokens.front().type != EToken::Semicolon)
+
+	if (tokens.front().keyword == EKeyword::With)
 	{
-		comps.push_back(parse_comp_ctor(tokens));
-		maybe_digest(tokens, EToken::Comma);
+		digest_keyword(tokens, EKeyword::With);
+		while (tokens.front().type != EToken::Semicolon)
+		{
+			comps.push_back(parse_comp_ctor(tokens));
+			maybe_digest(tokens, EToken::Comma);
+		}
 	}
+
 	auto end = tokens.front();
 	digest(tokens, EToken::Semicolon);
 
@@ -1920,6 +2112,25 @@ std::shared_ptr<Statement> parse_destroy_entity(std::deque<Token>& tokens)
 	digest(tokens, EToken::Semicolon);
 
 	return std::make_shared<DestroyEntityStatement>(std::tuple{ start, end }, entity_name);
+}
+
+//"get Position(x, y) from e1;"
+std::shared_ptr<Statement> parse_get_from_entity(std::deque<Token>& tokens)
+{
+	auto start = tokens.front();
+	digest_keyword(tokens, EKeyword::Get);
+	std::vector<CompParamCtor> comps;
+	while (tokens.front().keyword != EKeyword::From)
+	{
+		comps.push_back(parse_comp_params_ctor(tokens));
+		maybe_digest(tokens, EToken::Comma);
+	}
+	digest_keyword(tokens, EKeyword::From);
+	auto entity_name = digest_quote(tokens);
+	auto end = tokens.front();
+	digest(tokens, EToken::Semicolon);
+
+	return std::make_shared<GetStatement>(std::tuple{ start, end }, entity_name, comps);
 }
 
 //"attach Player(x: 2, y: 3) to player-character;"
@@ -2090,7 +2301,7 @@ std::vector<std::shared_ptr<Statement>> parse_block(std::deque<Token>& tokens)
 		}
 		else if (tok.keyword == EKeyword::Get)
 		{
-			//statements.push_back(parse_destroy_entity(tokens));
+			statements.push_back(parse_get_from_entity(tokens));
 		}
 		else if (tok.keyword == EKeyword::Foreach)
 		{

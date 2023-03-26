@@ -89,6 +89,11 @@ struct ECS
 	std::unordered_map<std::string, type_entity> types;	
 };
 
+const entt::entity ecs_get_type_id(ECS& ecs, std::string name)
+{
+	return ecs.types[name];
+}
+
 const ComponentType& ecs_get_type(ECS& ecs, std::string name)
 {
 	return ecs.registry.get<ComponentType>(ecs.types[name]);
@@ -128,8 +133,6 @@ instance_entity ecs_create_instance(ECS& ecs)
 
 void ecs_destroy_instance(ECS& ecs, instance_entity entity)
 {
-	printf("ECS destroyed entity #%d\n", entity);
-
 	for (auto& [e, ct] : ecs.registry.view<ComponentType>().each())
 	{
 		if (ct.adorned_entities.find(entity) != ct.adorned_entities.end())
@@ -215,7 +218,6 @@ void ecs_unadorn_instance(ECS& ecs, instance_entity key, std::string type_name)
 
 	if (comp != component_reg.registered.end())
 	{
-		printf("Destroyed entity #%d\n", comp->second);
 		ecs.registry.destroy(comp->second);
 		component_reg.registered.erase(comp->first);
 	}

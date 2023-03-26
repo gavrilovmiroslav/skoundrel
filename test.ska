@@ -1,38 +1,19 @@
 define Position(x: int, y: int);
 define Mass(kg: int);
-define Hit(ok: bool);
-define Player;
-define Collision;
+define Foo(bar: int);
 
-create player-character1 with Hit(ok: 3 == 4);
-create player-character2 with Hit(ok: true);
+create p1 with Position(x: 4, y: 5);
+create p2 with Mass(kg: 0), Foo(bar: 123);
+
+attach Mass(kg: 3) to p1;
+get Mass(x), Position(a, b) from p1;
+
+attach Mass(kg: x + a * b) to p2;
+get Mass(x2), Foo(bar) from p2;
 print();
 
-foreach pl with Hit(state) {
-  if (state) {
-    print();
-  }
-}
+destroy p1;
+print();
 
-detach Player from player-character1;
-destroy player-character1;
-
-create player-character1 with Position(x: 1 + 1, y: 2 + 2), Player, Hit(ok: 5 == 5);
-create player-character2 with Position(x: 12, y: 32), Player;
-attach Mass(kg: 1) to player-character1;
-attach Mass(kg: 33) to player-character1;
-detach Mass from player-character1;
-
-system Product[] {
-  foreach player1 with Position(x1, y1), Player, Hit(ok) {
-    print();
-  }
-}
-
-system Collisions[] {
-  foreach e1 with Position(x1, y1), Collision {
-    create collision with Position(x: x1 * 2, y: 2 * y1), Collision;
-    print();
-    destroy e1;
-  }
-}
+detach Foo from p2;
+print();
