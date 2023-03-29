@@ -110,6 +110,7 @@ enum class EType
 	Entity,
 	Int,
 	Float,
+	String,
 };
 
 std::string stringify_type(EType type)
@@ -120,6 +121,7 @@ std::string stringify_type(EType type)
 	case EType::Bool: return "Bool";
 	case EType::Int: return "Int";
 	case EType::Float: return "Float";
+	case EType::String: return "String";
 	case EType::Null: default: return "Null";
 	}
 }
@@ -181,6 +183,46 @@ std::string stringify_keyword(EKeyword keyword)
 	}
 }
 
+struct {
+	std::size_t index = 0;
+	std::unordered_map<std::size_t, std::string> interned_strings_index;
+	std::unordered_map<std::string, std::size_t> interned_strings_reindex;
+
+	std::size_t add(std::string str)
+	{
+		if (interned_strings_reindex.count(str) > 0)
+		{
+			return interned_strings_reindex[str];
+		}
+
+		auto next = interned_strings_index.size();
+		interned_strings_index[next] = str;
+		interned_strings_reindex[str] = next;
+		return next;
+	}
+
+	std::optional<std::size_t> get_index(std::string str)
+	{
+		if (interned_strings_reindex.count(str) > 0)
+		{
+			return std::make_optional(interned_strings_reindex[str]);
+		}
+
+		return std::nullopt;
+	}
+
+	std::optional<std::string> get_string(std::size_t index)
+	{
+		if (interned_strings_index.count(index) > 0)
+		{
+			return std::make_optional(interned_strings_index[index]);
+		}
+
+		return std::nullopt;
+	}
+
+} InternedStrings;
+
 struct TypedValue
 {
 	EType type;
@@ -191,6 +233,7 @@ struct TypedValue
 		int int_value;
 		float float_value;
 		bool bool_value;
+		std::size_t intern_string_index;
 	} data;
 };
 
@@ -215,6 +258,13 @@ static const TypedValue operator+(const TypedValue& lhs, const TypedValue& rhs)
 		res.type = EType::Float;
 		res.data.float_value = lhs.data.float_value + rhs.data.float_value;
 		break;
+	case EType::String:
+		res.type = EType::String;
+		auto ls = InternedStrings.get_string(lhs.data.intern_string_index).value_or(std::string{ "" });
+		auto rs = InternedStrings.get_string(rhs.data.intern_string_index).value_or(std::string{ "" });
+		auto index = InternedStrings.add(ls + rs);
+		res.data.intern_string_index = index;
+		break;
 	}
 
 	return res;
@@ -226,6 +276,7 @@ static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
+	if (lhs.type == EType::String) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -245,25 +296,40 @@ static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
 
 static const TypedValue operator*(const TypedValue& lhs, const TypedValue& rhs)
 {
-	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
-	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
-	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
-
 	TypedValue res;
-	switch (lhs.type)
+
+	if (lhs.type == EType::String && rhs.type == EType::Int)
 	{
-	case EType::Bool:
-		res.type = EType::Bool;
-		res.data.bool_value = lhs.data.bool_value && rhs.data.bool_value;
-		break;
-	case EType::Int:
-		res.type = EType::Int;
-		res.data.int_value = lhs.data.int_value * rhs.data.int_value;
-		break;
-	case EType::Float:
-		res.type = EType::Float;
-		res.data.float_value = lhs.data.float_value * rhs.data.float_value;
-		break;
+		res.type = EType::String;
+		std::string val = InternedStrings.get_string(lhs.data.intern_string_index).value_or(std::string{ "" });
+		std::string result = "";
+		for (int i = 0; i < rhs.data.int_value; i++)
+		{
+			result += val;
+		}
+		res.data.intern_string_index = InternedStrings.add(result);
+	}
+	else
+	{
+		if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+		if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+		if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
+
+		switch (lhs.type)
+		{
+		case EType::Bool:
+			res.type = EType::Bool;
+			res.data.bool_value = lhs.data.bool_value && rhs.data.bool_value;
+			break;
+		case EType::Int:
+			res.type = EType::Int;
+			res.data.int_value = lhs.data.int_value * rhs.data.int_value;
+			break;
+		case EType::Float:
+			res.type = EType::Float;
+			res.data.float_value = lhs.data.float_value * rhs.data.float_value;
+			break;
+		}
 	}
 
 	return res;
@@ -275,6 +341,7 @@ static const TypedValue operator/(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
+	if (lhs.type == EType::String) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -301,6 +368,7 @@ static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Float) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
+	if (lhs.type == EType::String) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -311,6 +379,64 @@ static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
 		break;
 	}
 
+	return res;
+}
+
+static const TypedValue operator ==(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	res.type = EType::Bool;
+
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.data.bool_value = lhs.data.int_value == rhs.data.int_value;
+		break;
+	case EType::Float:
+		res.data.bool_value = lhs.data.float_value == rhs.data.float_value;
+		break;
+	case EType::Bool:
+		res.data.bool_value = lhs.data.bool_value == rhs.data.bool_value;
+		break;
+	case EType::Entity:
+		res.data.bool_value = lhs.data.entity_value == rhs.data.entity_value;
+		break;
+	case EType::String:
+		res.data.bool_value = lhs.data.intern_string_index == rhs.data.intern_string_index;
+		break;
+	}
+	return res;
+}
+
+static const TypedValue operator !=(const TypedValue& lhs, const TypedValue& rhs)
+{
+	if (lhs.type != rhs.type) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Null) return TypedValue{ EType::Null };
+
+	TypedValue res;
+	res.type = EType::Bool;
+
+	switch (lhs.type)
+	{
+	case EType::Int:
+		res.data.bool_value = lhs.data.int_value != rhs.data.int_value;
+		break;
+	case EType::Float:
+		res.data.bool_value = lhs.data.float_value != rhs.data.float_value;
+		break;
+	case EType::Bool:
+		res.data.bool_value = lhs.data.bool_value != rhs.data.bool_value;
+		break;
+	case EType::Entity:
+		res.data.bool_value = lhs.data.entity_value != rhs.data.entity_value;
+		break;
+	case EType::String:
+		res.data.bool_value = lhs.data.intern_string_index != rhs.data.intern_string_index;
+		break;
+	}
 	return res;
 }
 
@@ -337,8 +463,6 @@ static const TypedValue operator _op_(const TypedValue& lhs, const TypedValue& r
 
 LOGICAL_OP(<);
 LOGICAL_OP(<=);
-LOGICAL_OP(==);
-LOGICAL_OP(!=);
 LOGICAL_OP(>=);
 LOGICAL_OP(>);
 
