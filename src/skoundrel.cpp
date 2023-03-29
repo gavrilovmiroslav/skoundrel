@@ -33,6 +33,7 @@ int main(int argc, char* argv[])
 		>	detach Foo from p2;
 		>	print();
 	*/
+
 	parse_file(ctx, "test.ska");
 
 	// systems tick via `update`:
