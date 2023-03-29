@@ -8,9 +8,8 @@ workspace "skoundrel"
 		targetdir "bin/%{cfg.buildcfg}"
 
 		externalincludedirs {
-			"$(SolutionDir)SDL/include/",
 			"$(SolutionDir)entt/single_include/",
-			"$(SolutionDir)libtcod/src/",			
+			"$(SolutionDir)glfw/include/",
 		}
 
 		includedirs {
@@ -21,14 +20,14 @@ workspace "skoundrel"
 			"src/**.h", "src/**.cpp"
 		}
 
-		links { "SDL2d" }
+		links { "glfw3" }
 
 		filter "configurations:Debug"
 			defines { "DEBUG" }
 			symbols "On"
-			libdirs { "./SDL/build/Debug", "./wren/lib" }
+			libdirs { "./glfw/build/src/Debug" }
 
 		filter "configurations:Release"
 			defines { "NDEBUG" }
 			optimize "On"
-			libdirs { "./SDL/build/Debug", "./wren/lib" } -- TODO: change later
+			libdirs { "./glfw/build/src/Release" } -- TODO: change later

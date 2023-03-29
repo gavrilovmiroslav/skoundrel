@@ -1,9 +1,6 @@
-[submodule "libtcod"]
-	path = libtcod
-	url = https://github.com/libtcod/libtcod.git
 [submodule "entt"]
 	path = entt
 	url = https://github.com/skypjack/entt.git
-[submodule "SDL"]
-	path = SDL
-	url = https://github.com/libsdl-org/SDL.git
+[submodule "glfw"]
+	path = glfw
+	url = https://github.com/glfw/glfw.git

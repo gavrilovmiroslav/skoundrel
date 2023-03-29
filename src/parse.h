@@ -361,7 +361,8 @@ struct System
 
 struct Context
 {
-	ECS* ecs = nullptr;
+	std::shared_ptr<ECS> ecs;
+	
 	Scope* scope;
 	
 	std::vector<std::string> source_lines;
@@ -756,7 +757,7 @@ struct Scope
 			}
 		}
 
-		for (auto key : to_delete)
+		for (auto& key : to_delete)
 		{
 			env.erase(key);
 		}
@@ -852,6 +853,7 @@ private:
 Context::Context()
 {
 	scope = new Scope();
+	ecs = std::make_shared<ECS>();
 }
 
 Context::~Context()

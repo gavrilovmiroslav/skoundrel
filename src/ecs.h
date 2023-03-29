@@ -87,6 +87,8 @@ struct ECS
 	entt::registry registry;
 	entt::sparse_set created_entities;
 	std::unordered_map<std::string, type_entity> types;	
+
+	ECS() {}
 };
 
 const entt::entity ecs_get_type_id(ECS& ecs, std::string name)
