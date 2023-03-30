@@ -34,7 +34,7 @@ int main(int argc, char* argv[])
 		>	print();
 	*/
 
-	parse_file(ctx, "test.ska");
+	parse_file(ctx, "test-str.ska");
 
 	// systems tick via `update`:
 	ctx.update();

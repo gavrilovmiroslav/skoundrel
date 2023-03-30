@@ -25,6 +25,11 @@ struct Bool
 	bool value;
 };
 
+struct InternedString
+{
+	std::size_t index;
+};
+
 using comp_entity = entt::entity;
 using instance_entity = entt::entity;
 using type_entity = entt::entity;
@@ -36,6 +41,7 @@ enum class EComponentMember
 	EntityRef,
 	Int,	
 	Float,
+	String,
 	Count
 };
 
@@ -55,6 +61,7 @@ struct ComponentMember
 		Int i;
 		Float f;
 		Bool b;
+		InternedString s;
 	} data;
 };
 
@@ -191,6 +198,9 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 		case EComponentMember::Bool:
 			member.data.b.value = false;
 			break;
+		case EComponentMember::String:
+			member.data.s.index = 0;
+			break;
 		case EComponentMember::Count:
 		case EComponentMember::None:
 			assert(member.kind != EComponentMember::Count && member.kind != EComponentMember::None);
@@ -257,6 +267,14 @@ void ecs_set_member_in_component(Component& comp, std::string member_name, Int i
 	auto member_index = comp.member_index.find(member_name)->second;
 	assert(comp.members[member_index].kind == EComponentMember::Int);
 	comp.members[member_index].data.i = i;
+}
+
+template<>
+void ecs_set_member_in_component(Component& comp, std::string member_name, InternedString s)
+{
+	auto member_index = comp.member_index.find(member_name)->second;
+	assert(comp.members[member_index].kind == EComponentMember::String);
+	comp.members[member_index].data.s = s;
 }
 
 template<>

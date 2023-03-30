@@ -61,6 +61,8 @@ enum class EToken
 	True,
 	False,
 	Lt, Le, Eq, Ne, Ge, Gt,
+	QuoteMark,
+	String,
 };
 
 enum class EKeyword
@@ -92,6 +94,7 @@ struct Token
 	EToken type;
 
 	EKeyword keyword;
+	std::size_t interned_str;
 	std::string quote;
 	int number;
 	bool boolean;
@@ -631,6 +634,27 @@ struct VarExpr : public Expr
 	std::string to_string(Context& ctx) override
 	{
 		return name;
+	}
+};
+
+struct StringExpr : public Expr
+{
+	std::size_t interned_index;
+
+	StringExpr(std::size_t s) : interned_index(s)
+	{}
+
+	TypedValue eval(Context& ctx) override
+	{
+		TypedValue v;
+		v.type = EType::String;
+		v.data.intern_string_index = interned_index;
+		return v;
+	}
+
+	std::string to_string(Context& ctx) override
+	{
+		return std::string("\"") + InternedStrings.get_string(interned_index).value() + std::string("\"");
 	}
 };
 
@@ -1195,6 +1219,7 @@ struct DefineComponentStatement : public Statement
 			case EType::Entity: comp_members.push_back({ k, EComponentMember::EntityRef }); break;
 			case EType::Int: comp_members.push_back({ k, EComponentMember::Int }); break;
 			case EType::Float: comp_members.push_back({ k, EComponentMember::Float }); break;
+			case EType::String: comp_members.push_back({ k, EComponentMember::String }); break;
 			}
 		}
 		ecs_create_type(*ctx.ecs, comp_name, comp_members);
@@ -1263,6 +1288,14 @@ struct CreateEntityStatement : public Statement
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, EntityRef{ typed_val.data.entity_value });
+					break;
+				case EComponentMember::String:
+					if (typed_val.type != EType::String)
+					{
+						ctx.make_interpret_error(string_format("Expected string, got %s", stringify_type(typed_val.type).c_str()), this);
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, InternedString{ typed_val.data.intern_string_index });
 					break;
 				}
 				i++;
@@ -1377,6 +1410,9 @@ struct GetStatement : public Statement
 					case EComponentMember::EntityRef:
 						expr_value.reset(new EntityExpr(value.data.e.value));
 						break;
+					case EComponentMember::String:
+						expr_value.reset(new StringExpr(value.data.s.index));
+						break;
 					}
 
 					std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, entity->r.value, comp, index, expr_value));
@@ -1462,6 +1498,14 @@ struct AttachStatement : public Statement
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, EntityRef{ typed_val.data.entity_value });
+					break;
+				case EComponentMember::String:
+					if (typed_val.type != EType::String)
+					{
+						ctx.make_interpret_error(string_format("Expected string, got %s", stringify_type(typed_val.type).c_str()), this);
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, InternedString{ typed_val.data.intern_string_index });
 					break;
 				}
 				i++;
@@ -1574,6 +1618,9 @@ struct QueryEntitiesStatement : public Statement
 						case EComponentMember::EntityRef:
 							expr_value.reset(new EntityExpr(value.data.e.value));
 							break;
+						case EComponentMember::String:
+							expr_value.reset(new StringExpr(value.data.s.index));
+							break;
 						}
 
 						std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, entity, comp, index, expr_value));
@@ -1634,7 +1681,7 @@ std::vector<TokenPos> split(std::string source_code)
 	static std::unordered_set<char> symbols{ 
 		'(', ')', ',', ';', ':', '[', ']', '_', 
 		'@', '+', '-', '*', '/', '{', '}', '<', 
-		'>', '=', '!'
+		'>', '=', '!', '\"'
 	};
 
 	std::vector<TokenPos> tokens;
@@ -1644,6 +1691,8 @@ std::vector<TokenPos> split(std::string source_code)
 	int x = 0;
 	int y = 1;
 	int start_x = 0;
+
+	bool inside_quote = false;
 
 	for (; i < source_code.size(); i++)
 	{				
@@ -1656,7 +1705,56 @@ std::vector<TokenPos> split(std::string source_code)
 		}
 
 		x++;
-		if (std::isalnum(c) || c == '-')
+
+		if (inside_quote)
+		{
+			if (c != '\"')
+			{
+				current_token += c;
+			}
+			else
+			{
+				{
+					TokenPos pos;
+					pos.token = current_token;
+					pos.line = y;
+					pos.start = start_x;
+					pos.end = start_x + current_token.size();
+					start_x = pos.end + 1;
+					tokens.push_back(pos);
+				}
+
+				current_token = "\"";
+
+				{
+					TokenPos pos;
+					pos.token = current_token;
+					pos.line = y;
+					pos.start = start_x;
+					pos.end = start_x + current_token.size();
+					tokens.push_back(pos);
+				}
+
+				current_token = "";
+				inside_quote = false;
+			}
+		}
+		else if (c == '\"')
+		{
+			inside_quote = true;
+			current_token = "\"";
+
+			TokenPos pos;
+			pos.token = current_token;
+			pos.line = y;
+			pos.start = start_x;
+			pos.end = start_x + current_token.size();
+			tokens.push_back(pos);
+			
+			current_token = "";
+			start_x = pos.end;
+		}
+		else if (std::isalnum(c) || c == '-')
 		{
 			if (current_token == "")
 			{
@@ -1750,9 +1848,10 @@ std::deque<Token> tokenize(std::vector<TokenPos> token_pos)
 	static std::unordered_set<std::string> symbols{ 
 		"(", ")", ",", ";", ":", "[", "]", 
 		"_", "@", "+", "-", "*", "/", "{", "}",
-		"<", "<=", "==", "!=", ">=", ">"
+		"<", "<=", "==", "!=", ">=", ">", "\""
 	};
 
+	bool inside_quotes = false;
 	std::deque<Token> tokens;
 	for (auto current_token : token_pos)
 	{
@@ -1857,6 +1956,11 @@ std::deque<Token> tokenize(std::vector<TokenPos> token_pos)
 				token.type = EToken::Gt;
 			else if (tok == ">=")
 				token.type = EToken::Ge;
+			else if (tok == "\"")
+			{
+				token.type = EToken::QuoteMark;
+				inside_quotes = !inside_quotes;
+			}
 			tokens.push_back(token);
 		}
 		else if (std::isdigit(tok[0]))
@@ -1879,8 +1983,16 @@ std::deque<Token> tokenize(std::vector<TokenPos> token_pos)
 			token.start = current_token.start;
 			token.end = current_token.end;
 
-			token.type = EToken::Quote;
-			token.quote = tok;
+			if (inside_quotes)
+			{
+				token.type = EToken::String;
+				token.interned_str = InternedStrings.add(tok);				
+			}
+			else
+			{
+				token.type = EToken::Quote;
+				token.quote = tok;
+			}
 			tokens.push_back(token);
 		}
 	}
@@ -1969,10 +2081,10 @@ EType parse_type_name(std::deque<Token>& tokens)
 {
 	auto tok = tokens.front();
 	auto type_name = digest_quote(tokens);
-	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool")
+	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool" && type_name != "string")
 	{
 		ParseError p;
-		p.text = string_format("Expected either int, ref, float, or bool found %s instead.", type_name.c_str());
+		p.text = string_format("Expected either int, ref, float, string, or bool found %s instead.", type_name.c_str());
 		p.token = tok;
 		generic_parse_error = p;
 		return EType::Null;
@@ -1993,6 +2105,10 @@ EType parse_type_name(std::deque<Token>& tokens)
 	else if (type_name == "float")
 	{
 		return EType::Float;
+	}
+	else if (type_name == "string")
+	{
+		return EType::String;
 	}
 
 	return EType::Entity;
@@ -2020,6 +2136,14 @@ std::shared_ptr<Expr> parse_atom(std::deque<Token>& tokens)
 	else if (tok.type == EToken::False)
 	{
 		return std::shared_ptr<Expr>(new BoolExpr(false));
+	}
+	else if (tok.type == EToken::QuoteMark)
+	{
+		tok = tokens.front();
+		auto value = std::shared_ptr<Expr>(new StringExpr(tok.interned_str));
+		tokens.pop_front();
+		digest(tokens, EToken::QuoteMark);
+		return value;
 	}
 	
 	return nullptr;
@@ -2378,7 +2502,8 @@ std::vector<std::shared_ptr<Statement>> parse(std::string input)
 {
 	std::vector<std::shared_ptr<Statement>> statements;
 
-	auto& tokens = tokenize(split(input));
+	auto& lex = split(input);
+	auto& tokens = tokenize(lex);
 
 	return parse_block(tokens);
 }

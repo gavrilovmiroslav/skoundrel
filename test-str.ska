@@ -1,0 +1,5 @@
+define Str(x: string);
+
+create e1 with Str(x: "hello " + "world");
+get Str(x) from e1;
+print();
