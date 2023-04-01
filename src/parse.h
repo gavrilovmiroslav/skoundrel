@@ -40,7 +40,7 @@ std::string string_format(const std::string fmt_str, ...)
 enum class EToken
 {
 	Keyword,
-	Number,
+	Number,	
 	OpenBracket,
 	ClosedBracket,
 	OpenParen,
@@ -114,6 +114,7 @@ enum class EType
 	Int,
 	Float,
 	String,
+	Collection,
 };
 
 std::string stringify_type(EType type)
@@ -125,6 +126,7 @@ std::string stringify_type(EType type)
 	case EType::Int: return "Int";
 	case EType::Float: return "Float";
 	case EType::String: return "String";
+	case EType::Collection: return "Collection";
 	case EType::Null: default: return "Null";
 	}
 }
@@ -186,10 +188,11 @@ std::string stringify_keyword(EKeyword keyword)
 	}
 }
 
-struct {
+struct /* InternedStringsSingleton */ {
 	std::size_t index = 0;
 	std::unordered_map<std::size_t, std::string> interned_strings_index;
 	std::unordered_map<std::string, std::size_t> interned_strings_reindex;
+	std::vector<std::size_t> freed_indices;
 
 	std::size_t add(std::string str)
 	{
@@ -198,10 +201,20 @@ struct {
 			return interned_strings_reindex[str];
 		}
 
-		auto next = interned_strings_index.size();
-		interned_strings_index[next] = str;
-		interned_strings_reindex[str] = next;
-		return next;
+		std::size_t index = 0;
+		if (freed_indices.size() > 0)
+		{
+			index = freed_indices.back();
+			freed_indices.pop_back();
+		}
+		else
+		{
+			index = interned_strings_index.size();
+		}
+		
+		interned_strings_index[index] = str;
+		interned_strings_reindex[str] = index;
+		return index;
 	}
 
 	std::optional<std::size_t> get_index(std::string str)
@@ -226,6 +239,168 @@ struct {
 
 } InternedStrings;
 
+struct TypedValue;
+using Collection = std::vector<std::shared_ptr<TypedValue>>;
+
+struct /* InternedCollectionsSingleton */ {
+	std::size_t index = 0;
+	std::vector<Collection> interned_collection_values;
+	std::unordered_map<std::size_t, std::string> interned_collection_reindex;
+	std::unordered_map<std::string, std::size_t> interned_collection_index;
+	std::vector<std::size_t> freed_indices;
+
+	std::size_t create_collection(std::string name)
+	{
+		if (interned_collection_index.count(name) > 0)
+		{
+			return interned_collection_index[name];
+		}
+		
+		std::size_t index = 0;
+		std::size_t size = interned_collection_values.size();
+
+		if (freed_indices.size() > 0)
+		{
+			index = freed_indices.back();
+			freed_indices.pop_back();
+		}
+		else
+		{
+			index = size;
+		}
+
+		if (index == size)
+		{
+			interned_collection_values.push_back(Collection{});
+		}
+		interned_collection_reindex[index] = name;
+		interned_collection_index[name] = index;
+
+		return index;
+	}
+
+	void destroy_collection(std::string name)
+	{
+		if (interned_collection_index.count(name) > 0)
+		{
+			return;
+		}
+
+		interned_collection_values[interned_collection_index[name]].clear();
+		interned_collection_reindex[interned_collection_index[name]] = "";
+		freed_indices.push_back(interned_collection_index[name]);
+	}
+
+	std::string get_collection_name_at_index(std::size_t index)
+	{
+		return interned_collection_reindex[index];
+	}
+
+	Collection& get_collection_by_name(std::string name)
+	{
+		return interned_collection_values[interned_collection_index[name]];
+	}
+
+	Collection get_collection_by_index(std::size_t index)
+	{
+		return interned_collection_values[index];
+	}
+
+	std::shared_ptr<TypedValue> get_value_by_index(std::string collection_name, std::size_t element_index)
+	{
+		return interned_collection_values[interned_collection_index[collection_name]][element_index];
+	}
+
+	std::size_t get_collection_size(std::string collection_name)
+	{
+		if (std::find(interned_collection_values.begin(), interned_collection_values.end(), interned_collection_index[collection_name]) != interned_collection_values.end())		
+		{
+			return interned_collection_values[interned_collection_index[collection_name]].size();
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	void add_value(std::string collection_name, std::shared_ptr<TypedValue> value)
+	{
+		interned_collection_values[interned_collection_index[collection_name]].push_back(value);
+	}
+
+	void append_collection(std::size_t first_index, std::size_t second_index)
+	{
+		auto& first = interned_collection_values[first_index];
+		auto& second = interned_collection_values[second_index];
+
+		first.insert(first.end(), second.begin(), second.end());
+	}
+
+	std::size_t sum_collection(std::string first_name, std::string second_name)
+	{
+		auto& first = interned_collection_values[interned_collection_index[first_name]];
+		auto& second = interned_collection_values[interned_collection_index[second_name]];
+		
+		first.insert(first.end(), second.begin(), second.end());
+
+		return interned_collection_index[first_name];
+	}
+
+	std::size_t sum_collection(std::size_t first_index, std::size_t second_index)
+	{
+		auto& first = interned_collection_values[first_index];
+		auto& second = interned_collection_values[second_index];
+
+		first.insert(first.end(), second.begin(), second.end());
+
+		return first_index;
+	}
+
+	std::size_t diff_collection(std::size_t first_index, std::size_t second_index)
+	{
+		auto& first = interned_collection_values[first_index];
+		auto& second = interned_collection_values[second_index];
+
+		for (auto& el : second)
+		{
+			first.erase(std::remove(first.begin(), first.end(), el), first.end());
+		}
+
+		return first_index;
+	}
+
+	std::size_t intersect_collection(std::size_t first_index, std::size_t second_index)
+	{
+		auto& first = interned_collection_values[first_index];
+		auto& second = interned_collection_values[second_index];
+		Collection common;
+
+		for (auto& el : second)
+		{
+			if (std::find(first.begin(), first.end(), el) != first.end())
+			{
+				common.push_back(el);
+			}
+		}
+
+		first.clear();
+		first.insert(first.end(), common.begin(), common.end());
+
+		return first_index;
+	}
+
+	void remove_value_at_index(std::string collection_name, std::size_t element_index)
+	{
+		auto& collection = interned_collection_values[interned_collection_index[collection_name]];
+		if (element_index < collection.size())
+		{
+			collection.erase(collection.begin() + element_index);
+		}
+	}
+
+} InternedCollections;
+
+
 struct TypedValue
 {
 	EType type;
@@ -237,8 +412,34 @@ struct TypedValue
 		float float_value;
 		bool bool_value;
 		std::size_t intern_string_index;
+		std::size_t intern_collection_index;
 	} data;
 };
+
+std::string stringify_typed_value(TypedValue& tv)
+{
+	switch (tv.type)
+	{
+	case EType::Null: return "null";
+	case EType::Bool: return tv.data.bool_value ? "true" : "false";
+	case EType::Entity: return std::to_string((uint64_t)tv.data.entity_value);
+	case EType::Int: return std::to_string(tv.data.int_value);
+	case EType::Float: return std::to_string(tv.data.float_value);
+	case EType::String: return std::string{ "\"" } + InternedStrings.get_string(tv.data.intern_string_index).value() + std::string{"\""};
+	case EType::Collection: 
+	{
+		auto& coll = InternedCollections.get_collection_by_index(tv.data.intern_collection_index);
+		std::string result{ "[" };
+		for (auto& el : coll)
+		{
+			result += stringify_typed_value(*el);
+			result += ",";
+		}
+		result += "]";
+		return result;
+	}
+	}
+}
 
 static const TypedValue operator+(const TypedValue& lhs, const TypedValue& rhs)
 {
@@ -262,11 +463,17 @@ static const TypedValue operator+(const TypedValue& lhs, const TypedValue& rhs)
 		res.data.float_value = lhs.data.float_value + rhs.data.float_value;
 		break;
 	case EType::String:
+	{
 		res.type = EType::String;
 		auto ls = InternedStrings.get_string(lhs.data.intern_string_index).value_or(std::string{ "" });
 		auto rs = InternedStrings.get_string(rhs.data.intern_string_index).value_or(std::string{ "" });
 		auto index = InternedStrings.add(ls + rs);
 		res.data.intern_string_index = index;
+	}
+		break;
+	case EType::Collection:
+		res.type = EType::Collection;
+		res.data.intern_collection_index = InternedCollections.sum_collection(lhs.data.intern_collection_index, rhs.data.intern_collection_index);
 		break;
 	}
 
@@ -291,6 +498,10 @@ static const TypedValue operator-(const TypedValue& lhs, const TypedValue& rhs)
 	case EType::Float:
 		res.type = EType::Float;
 		res.data.float_value = lhs.data.float_value - rhs.data.float_value;
+		break;
+	case EType::Collection:
+		res.type = EType::Collection;
+		res.data.intern_collection_index = InternedCollections.diff_collection(lhs.data.intern_collection_index, rhs.data.intern_collection_index);
 		break;
 	}
 
@@ -331,6 +542,10 @@ static const TypedValue operator*(const TypedValue& lhs, const TypedValue& rhs)
 		case EType::Float:
 			res.type = EType::Float;
 			res.data.float_value = lhs.data.float_value * rhs.data.float_value;
+			break;
+		case EType::Collection:
+			res.type = EType::Collection;
+			res.data.intern_collection_index = InternedCollections.intersect_collection(lhs.data.intern_collection_index, rhs.data.intern_collection_index);
 			break;
 		}
 	}
@@ -410,6 +625,9 @@ static const TypedValue operator ==(const TypedValue& lhs, const TypedValue& rhs
 	case EType::String:
 		res.data.bool_value = lhs.data.intern_string_index == rhs.data.intern_string_index;
 		break;
+	case EType::Collection:
+		res.data.bool_value = lhs.data.intern_collection_index == rhs.data.intern_collection_index;
+		break;
 	}
 	return res;
 }
@@ -439,6 +657,9 @@ static const TypedValue operator !=(const TypedValue& lhs, const TypedValue& rhs
 	case EType::String:
 		res.data.bool_value = lhs.data.intern_string_index != rhs.data.intern_string_index;
 		break;
+	case EType::Collection:
+		res.data.bool_value = lhs.data.intern_collection_index != rhs.data.intern_collection_index;
+		break;
 	}
 	return res;
 }
@@ -450,6 +671,8 @@ static const TypedValue operator _op_(const TypedValue& lhs, const TypedValue& r
 	if (lhs.type == EType::Null) return TypedValue{ EType::Null }; \
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null }; \
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null }; \
+	if (lhs.type == EType::Collection) return TypedValue{ EType::Null }; \
+	\
 	TypedValue res; \
 	res.type = EType::Bool; \
 	switch (lhs.type) \
@@ -596,7 +819,6 @@ struct FloatExpr : public Expr
 	{
 		return std::to_string(num);
 	}
-
 };
 
 struct EntityExpr : public Expr
@@ -655,6 +877,27 @@ struct StringExpr : public Expr
 	std::string to_string(Context& ctx) override
 	{
 		return std::string("\"") + InternedStrings.get_string(interned_index).value() + std::string("\"");
+	}
+};
+
+struct CollectionExpr : public Expr
+{
+	std::size_t interned_index;
+
+	CollectionExpr(std::size_t s) : interned_index(s)
+	{}
+
+	TypedValue eval(Context& ctx) override
+	{
+		TypedValue v;
+		v.type = EType::Collection;
+		v.data.intern_collection_index = interned_index;
+		return v;
+	}
+
+	std::string to_string(Context& ctx) override
+	{
+		return InternedCollections.get_collection_name_at_index(interned_index) + std::string("[...]");
 	}
 };
 
