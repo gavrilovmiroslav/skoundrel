@@ -30,6 +30,11 @@ struct InternedString
 	std::size_t index;
 };
 
+struct InternedCollection
+{
+	std::size_t index;
+};
+
 using comp_entity = entt::entity;
 using instance_entity = entt::entity;
 using type_entity = entt::entity;
@@ -42,6 +47,7 @@ enum class EComponentMember
 	Int,	
 	Float,
 	String,
+	Collection,
 	Count
 };
 
@@ -62,6 +68,7 @@ struct ComponentMember
 		Float f;
 		Bool b;
 		InternedString s;
+		InternedCollection c;
 	} data;
 };
 
@@ -201,6 +208,10 @@ comp_entity ecs_adorn_instance(ECS& ecs, instance_entity key, std::string type_n
 		case EComponentMember::String:
 			member.data.s.index = 0;
 			break;
+		case EComponentMember::Collection:
+			member.data.c.index = 0;
+			break;
+
 		case EComponentMember::Count:
 		case EComponentMember::None:
 			assert(member.kind != EComponentMember::Count && member.kind != EComponentMember::None);
@@ -275,6 +286,14 @@ void ecs_set_member_in_component(Component& comp, std::string member_name, Inter
 	auto member_index = comp.member_index.find(member_name)->second;
 	assert(comp.members[member_index].kind == EComponentMember::String);
 	comp.members[member_index].data.s = s;
+}
+
+template<>
+void ecs_set_member_in_component(Component& comp, std::string member_name, InternedCollection c)
+{
+	auto member_index = comp.member_index.find(member_name)->second;
+	assert(comp.members[member_index].kind == EComponentMember::Collection);
+	comp.members[member_index].data.c = c;
 }
 
 template<>

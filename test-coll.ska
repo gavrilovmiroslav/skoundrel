@@ -1,0 +1,4 @@
+define Foo(bar: collection);
+create p with Foo(bar: [ 1, 2, 3 ]);
+get Foo(bar) from p;
+print();

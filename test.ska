@@ -1,9 +1,9 @@
 define Position(x: int, y: int);
 define Mass(kg: int);
-define Foo(bar: int);
+define Foo(bar: collection);
 
 create p1 with Position(x: 4, y: 5);
-create p2 with Mass(kg: 0), Foo(bar: 123);
+create p2 with Mass(kg: 0), Foo(bar: [ 1, 2, 3 ]);
 
 attach Mass(kg: 3) to p1;
 get Mass(x), Position(a, b) from p1;

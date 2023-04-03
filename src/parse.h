@@ -239,23 +239,40 @@ struct /* InternedStringsSingleton */ {
 
 } InternedStrings;
 
-struct TypedValue;
-using Collection = std::vector<std::shared_ptr<TypedValue>>;
+struct TypedValue
+{
+	EType type;
 
-struct /* InternedCollectionsSingleton */ {
+	union
+	{
+		entt::entity entity_value;
+		int int_value;
+		float float_value;
+		bool bool_value;
+		std::size_t intern_string_index;
+		std::size_t intern_collection_index;
+
+		long complete_data;
+	} data;
+};
+
+using Collection = std::vector<TypedValue>;
+
+struct InternedCollectionsSingleton {
 	std::size_t index = 0;
 	std::vector<Collection> interned_collection_values;
 	std::unordered_map<std::size_t, std::string> interned_collection_reindex;
 	std::unordered_map<std::string, std::size_t> interned_collection_index;
 	std::vector<std::size_t> freed_indices;
 
-	std::size_t create_collection(std::string name)
+	void assign_collection_name(std::size_t index, std::string name)
 	{
-		if (interned_collection_index.count(name) > 0)
-		{
-			return interned_collection_index[name];
-		}
-		
+		interned_collection_reindex[index] = name;
+		interned_collection_index[name] = index;
+	}
+
+	std::size_t create_collection()
+	{		
 		std::size_t index = 0;
 		std::size_t size = interned_collection_values.size();
 
@@ -273,8 +290,6 @@ struct /* InternedCollectionsSingleton */ {
 		{
 			interned_collection_values.push_back(Collection{});
 		}
-		interned_collection_reindex[index] = name;
-		interned_collection_index[name] = index;
 
 		return index;
 	}
@@ -306,16 +321,16 @@ struct /* InternedCollectionsSingleton */ {
 		return interned_collection_values[index];
 	}
 
-	std::shared_ptr<TypedValue> get_value_by_index(std::string collection_name, std::size_t element_index)
+	TypedValue get_value_by_index(std::size_t collection_index, std::size_t element_index)
 	{
-		return interned_collection_values[interned_collection_index[collection_name]][element_index];
+		return interned_collection_values[collection_index][element_index];
 	}
 
-	std::size_t get_collection_size(std::string collection_name)
+	std::size_t get_collection_size(std::size_t collection_index)
 	{
-		if (std::find(interned_collection_values.begin(), interned_collection_values.end(), interned_collection_index[collection_name]) != interned_collection_values.end())		
-		{
-			return interned_collection_values[interned_collection_index[collection_name]].size();
+		if (collection_index < interned_collection_values.size())
+		{ 
+			return interned_collection_values[collection_index].size();
 		}
 		else
 		{
@@ -323,9 +338,14 @@ struct /* InternedCollectionsSingleton */ {
 		}
 	}
 
-	void add_value(std::string collection_name, std::shared_ptr<TypedValue> value)
+	void clear_collection(std::size_t collection_index)
 	{
-		interned_collection_values[interned_collection_index[collection_name]].push_back(value);
+		interned_collection_values[collection_index].clear();
+	}
+
+	void add_collection_value(std::size_t collection_index, TypedValue value)
+	{
+		interned_collection_values[collection_index].push_back(value);
 	}
 
 	void append_collection(std::size_t first_index, std::size_t second_index)
@@ -334,16 +354,6 @@ struct /* InternedCollectionsSingleton */ {
 		auto& second = interned_collection_values[second_index];
 
 		first.insert(first.end(), second.begin(), second.end());
-	}
-
-	std::size_t sum_collection(std::string first_name, std::string second_name)
-	{
-		auto& first = interned_collection_values[interned_collection_index[first_name]];
-		auto& second = interned_collection_values[interned_collection_index[second_name]];
-		
-		first.insert(first.end(), second.begin(), second.end());
-
-		return interned_collection_index[first_name];
 	}
 
 	std::size_t sum_collection(std::size_t first_index, std::size_t second_index)
@@ -356,65 +366,18 @@ struct /* InternedCollectionsSingleton */ {
 		return first_index;
 	}
 
-	std::size_t diff_collection(std::size_t first_index, std::size_t second_index)
+	std::size_t diff_collection(std::size_t first_index, std::size_t second_index);
+	std::size_t intersect_collection(std::size_t first_index, std::size_t second_index);
+
+	void remove_value_at_index(std::size_t collection_index, std::size_t element_index)
 	{
-		auto& first = interned_collection_values[first_index];
-		auto& second = interned_collection_values[second_index];
-
-		for (auto& el : second)
-		{
-			first.erase(std::remove(first.begin(), first.end(), el), first.end());
-		}
-
-		return first_index;
-	}
-
-	std::size_t intersect_collection(std::size_t first_index, std::size_t second_index)
-	{
-		auto& first = interned_collection_values[first_index];
-		auto& second = interned_collection_values[second_index];
-		Collection common;
-
-		for (auto& el : second)
-		{
-			if (std::find(first.begin(), first.end(), el) != first.end())
-			{
-				common.push_back(el);
-			}
-		}
-
-		first.clear();
-		first.insert(first.end(), common.begin(), common.end());
-
-		return first_index;
-	}
-
-	void remove_value_at_index(std::string collection_name, std::size_t element_index)
-	{
-		auto& collection = interned_collection_values[interned_collection_index[collection_name]];
+		auto& collection = interned_collection_values[collection_index];
 		if (element_index < collection.size())
 		{
 			collection.erase(collection.begin() + element_index);
 		}
 	}
-
 } InternedCollections;
-
-
-struct TypedValue
-{
-	EType type;
-
-	union
-	{
-		entt::entity entity_value;
-		int int_value;
-		float float_value;
-		bool bool_value;
-		std::size_t intern_string_index;
-		std::size_t intern_collection_index;
-	} data;
-};
 
 std::string stringify_typed_value(TypedValue& tv)
 {
@@ -432,7 +395,7 @@ std::string stringify_typed_value(TypedValue& tv)
 		std::string result{ "[" };
 		for (auto& el : coll)
 		{
-			result += stringify_typed_value(*el);
+			result += stringify_typed_value(el);
 			result += ",";
 		}
 		result += "]";
@@ -560,6 +523,7 @@ static const TypedValue operator/(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Entity) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
 	if (lhs.type == EType::String) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Collection) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -587,6 +551,7 @@ static const TypedValue operator%(const TypedValue& lhs, const TypedValue& rhs)
 	if (lhs.type == EType::Float) return TypedValue{ EType::Null };
 	if (lhs.type == EType::Bool) return TypedValue{ EType::Null };
 	if (lhs.type == EType::String) return TypedValue{ EType::Null };
+	if (lhs.type == EType::Collection) return TypedValue{ EType::Null };
 
 	TypedValue res;
 	switch (lhs.type)
@@ -626,6 +591,7 @@ static const TypedValue operator ==(const TypedValue& lhs, const TypedValue& rhs
 		res.data.bool_value = lhs.data.intern_string_index == rhs.data.intern_string_index;
 		break;
 	case EType::Collection:
+		// TODO: currently, byref equality; this might not be useful?
 		res.data.bool_value = lhs.data.intern_collection_index == rhs.data.intern_collection_index;
 		break;
 	}
@@ -658,6 +624,7 @@ static const TypedValue operator !=(const TypedValue& lhs, const TypedValue& rhs
 		res.data.bool_value = lhs.data.intern_string_index != rhs.data.intern_string_index;
 		break;
 	case EType::Collection:
+		// TODO: currently, byref equality; this might not be useful?
 		res.data.bool_value = lhs.data.intern_collection_index != rhs.data.intern_collection_index;
 		break;
 	}
@@ -691,6 +658,58 @@ LOGICAL_OP(<);
 LOGICAL_OP(<=);
 LOGICAL_OP(>=);
 LOGICAL_OP(>);
+
+std::size_t InternedCollectionsSingleton::diff_collection(std::size_t first_index, std::size_t second_index)
+{
+	auto& first = interned_collection_values[first_index];
+	auto& second = interned_collection_values[second_index];
+	Collection remaining;
+
+	for (auto el : second)
+	{
+		bool skip = false;
+		for (auto el2 : first)
+		{
+			if ((el == el2).data.bool_value)
+			{
+				skip = true;
+				break;
+			}
+		}
+		if (!skip) remaining.push_back(el);
+	}
+
+	first.clear();
+	first.insert(first.end(), remaining.begin(), remaining.end());
+
+	return first_index;
+}
+
+std::size_t InternedCollectionsSingleton::intersect_collection(std::size_t first_index, std::size_t second_index)
+{
+	auto& first = interned_collection_values[first_index];
+	auto& second = interned_collection_values[second_index];
+	Collection common;
+
+	for (auto& el : second)
+	{
+		bool add = false;
+		for (auto el2 : first)
+		{
+			if ((el == el2).data.bool_value)
+			{
+				add = true;
+				break;
+			}
+		}
+		if (add) common.push_back(el);
+	}
+
+	first.clear();
+	first.insert(first.end(), common.begin(), common.end());
+
+	return first_index;
+}
 
 struct Scope;
 struct Statement;
@@ -882,22 +901,52 @@ struct StringExpr : public Expr
 
 struct CollectionExpr : public Expr
 {
-	std::size_t interned_index;
+	std::optional<std::size_t> collection_index = std::nullopt;
+	std::vector<std::shared_ptr<Expr>> elements;
 
-	CollectionExpr(std::size_t s) : interned_index(s)
+	CollectionExpr(std::size_t ci) 
+		: collection_index{ std::make_optional(ci) }
+	{}
+
+	CollectionExpr(std::vector<std::shared_ptr<Expr>> els) 
+		: collection_index{ std::nullopt }
+		, elements{els}
 	{}
 
 	TypedValue eval(Context& ctx) override
 	{
 		TypedValue v;
 		v.type = EType::Collection;
-		v.data.intern_collection_index = interned_index;
+		
+		bool is_old = collection_index.has_value();
+		
+		if (is_old)
+		{
+			v.data.intern_collection_index = collection_index.value();
+		}
+		else
+		{
+			collection_index = InternedCollections.create_collection();
+			for (auto& el : elements)
+			{
+				InternedCollections.add_collection_value(collection_index.value(), el->eval(ctx));
+			}
+		}
+		
 		return v;
 	}
 
 	std::string to_string(Context& ctx) override
 	{
-		return InternedCollections.get_collection_name_at_index(interned_index) + std::string("[...]");
+		auto& coll = InternedCollections.get_collection_by_index(collection_index.value());
+		std::string str = "[ ";
+		for (auto& e : coll)
+		{
+			str += stringify_typed_value(e) + ", ";
+		}
+		str += "]";
+
+		return str;
 	}
 };
 
@@ -1463,6 +1512,7 @@ struct DefineComponentStatement : public Statement
 			case EType::Int: comp_members.push_back({ k, EComponentMember::Int }); break;
 			case EType::Float: comp_members.push_back({ k, EComponentMember::Float }); break;
 			case EType::String: comp_members.push_back({ k, EComponentMember::String }); break;
+			case EType::Collection: comp_members.push_back({ k, EComponentMember::Collection }); break;
 			}
 		}
 		ecs_create_type(*ctx.ecs, comp_name, comp_members);
@@ -1497,6 +1547,10 @@ struct CreateEntityStatement : public Statement
 			for (auto& [member_name, value] : ctor.fields)
 			{
 				auto& typed_val = value->eval(ctx);
+				if (typed_val.type == EType::Collection)
+				{
+					typed_val.data.intern_collection_index = dynamic_cast<CollectionExpr*>(value.get())->collection_index.value();
+				}
 
 				switch (type.members[i].kind)
 				{
@@ -1540,7 +1594,16 @@ struct CreateEntityStatement : public Statement
 					}
 					ecs_set_member_in_component(comp, member_name, InternedString{ typed_val.data.intern_string_index });
 					break;
+				case EComponentMember::Collection:
+					if (typed_val.type != EType::Collection)
+					{
+						ctx.make_interpret_error(string_format("Expected collection, got %s", stringify_type(typed_val.type).c_str()), this);
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, InternedCollection{ typed_val.data.intern_collection_index });
+					break;
 				}
+
 				i++;
 			}
 		}
@@ -1656,6 +1719,9 @@ struct GetStatement : public Statement
 					case EComponentMember::String:
 						expr_value.reset(new StringExpr(value.data.s.index));
 						break;
+					case EComponentMember::Collection:
+						expr_value.reset(new CollectionExpr(value.data.c.index));
+						break;
 					}
 
 					std::shared_ptr<Expr> ref_expr(new CompMemberRefExpr(name, entity->r.value, comp, index, expr_value));
@@ -1749,6 +1815,14 @@ struct AttachStatement : public Statement
 						return;
 					}
 					ecs_set_member_in_component(comp, member_name, InternedString{ typed_val.data.intern_string_index });
+					break;
+				case EComponentMember::Collection:
+					if (typed_val.type != EType::Collection)
+					{
+						ctx.make_interpret_error(string_format("Expected collection, got %s", stringify_type(typed_val.type).c_str()), this);
+						return;
+					}
+					ecs_set_member_in_component(comp, member_name, InternedCollection{ typed_val.data.intern_collection_index });
 					break;
 				}
 				i++;
@@ -1863,6 +1937,9 @@ struct QueryEntitiesStatement : public Statement
 							break;
 						case EComponentMember::String:
 							expr_value.reset(new StringExpr(value.data.s.index));
+							break;
+						case EComponentMember::Collection:
+							expr_value.reset(new CollectionExpr(value.data.c.index));
 							break;
 						}
 
@@ -2324,10 +2401,10 @@ EType parse_type_name(std::deque<Token>& tokens)
 {
 	auto tok = tokens.front();
 	auto type_name = digest_quote(tokens);
-	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool" && type_name != "string")
+	if (type_name != "int" && type_name != "ref" && type_name != "float" && type_name != "bool" && type_name != "string" && type_name != "collection")
 	{
 		ParseError p;
-		p.text = string_format("Expected either int, ref, float, string, or bool found %s instead.", type_name.c_str());
+		p.text = string_format("Expected either int, ref, float, string, collection, or bool, but found %s instead.", type_name.c_str());
 		p.token = tok;
 		generic_parse_error = p;
 		return EType::Null;
@@ -2352,6 +2429,10 @@ EType parse_type_name(std::deque<Token>& tokens)
 	else if (type_name == "string")
 	{
 		return EType::String;
+	}
+	else if (type_name == "collection")
+	{
+		return EType::Collection;
 	}
 
 	return EType::Entity;
@@ -2379,6 +2460,17 @@ std::shared_ptr<Expr> parse_atom(std::deque<Token>& tokens)
 	else if (tok.type == EToken::False)
 	{
 		return std::shared_ptr<Expr>(new BoolExpr(false));
+	}
+	else if (tok.type == EToken::OpenBracket)
+	{
+		std::vector<std::shared_ptr<Expr>> elements;
+		while (tokens.front().type != EToken::ClosedBracket)
+		{
+			elements.push_back(parse_atom(tokens));
+			maybe_digest(tokens, EToken::Comma);
+		}
+		digest(tokens, EToken::ClosedBracket);
+		return std::shared_ptr<Expr>(new CollectionExpr(elements));
 	}
 	else if (tok.type == EToken::QuoteMark)
 	{
